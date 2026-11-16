@@ -9,19 +9,22 @@ Everything is drawn with coloured boxes and spheres: no assets, no textures.
 The only dependency is [macroquad](https://crates.io/crates/macroquad) (window,
 input, GL drawing, random numbers).
 
-## Download
+## Download (no install, no Rust needed)
 
-Prebuilt binaries (Linux x86_64, Windows x86_64, macOS Apple Silicon) are built by
-GitHub Actions:
+Pick your system, unpack, and run `clown_skate_zombie_haul`:
 
-* **Releases:** <https://github.com/noisyloop/ClownPunk/releases/latest>
-  (published automatically when a `v*` tag is pushed)
-* **Latest CI build:** open the newest run on the
-  [Actions page](https://github.com/noisyloop/ClownPunk/actions/workflows/build.yml)
-  and download the artifact for your platform.
+| System | Download |
+|--------|----------|
+| Windows (64-bit) | [clown-skate-zombie-haul-windows-x86_64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-windows-x86_64.zip) |
+| macOS (Apple Silicon) | [clown-skate-zombie-haul-macos-arm64.tar.gz](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-macos-arm64.tar.gz) |
+| Linux (64-bit) | [clown-skate-zombie-haul-linux-x86_64.tar.gz](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-linux-x86_64.tar.gz) |
 
-Unpack and run `clown_skate_zombie_haul` (macOS may need
-`xattr -d com.apple.quarantine clown_skate_zombie_haul` since the build is unsigned).
+All releases: <https://github.com/noisyloop/ClownPunk/releases>
+
+Notes: the builds are unsigned. Windows SmartScreen may say "unknown publisher"
+(More info > Run anyway). On macOS run
+`xattr -d com.apple.quarantine clown_skate_zombie_haul` once, then
+`./clown_skate_zombie_haul`. On Linux, `chmod +x` it if needed.
 
 [![Build](https://github.com/noisyloop/ClownPunk/actions/workflows/build.yml/badge.svg)](https://github.com/noisyloop/ClownPunk/actions/workflows/build.yml)
 

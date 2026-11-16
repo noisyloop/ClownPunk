@@ -50,9 +50,34 @@ jobs:
           name: clown-skate-zombie-haul-${{ matrix.name }}
           path: ${{ env.ASSET }}
 
-      - name: Attach to GitHub Release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+  # Publishes the three archives as a public GitHub Release so anyone can
+  # download them without a GitHub login. Pushes to main / this branch update
+  # the rolling "latest" release; pushing a v* tag makes a permanent release.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' && (
+        startsWith(github.ref, 'refs/tags/v') ||
+        github.ref_name == 'main' ||
+        github.ref_name == 'claude/clown-skateboard-zombie-0i0wy6')
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: ${{ env.ASSET }}
-          generate_release_notes: true
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$REPO" \
+              --title "Clown Skate Zombie Haul $GITHUB_REF_NAME" --generate-notes
+          else
+            # Rolling release: replace the old one so the tag moves to this commit.
+            gh release delete latest --cleanup-tag -y --repo "$REPO" || true
+            gh release create latest dist/* --repo "$REPO" --target "$GITHUB_SHA" \
+              --title "Latest build" \
+              --notes "Automatic build of commit $GITHUB_SHA. Unpack and run clown_skate_zombie_haul."
+          fi
