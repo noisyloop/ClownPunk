@@ -1,4 +1,8 @@
-# Clown Skate Zombie Haul
+<p align="center">
+  <img src="docs/clown.png" alt="The clown" width="160">
+</p>
+
+<h1 align="center">Clown Skate Zombie Haul</h1>
 
 A small offline first-person 3D game sketch in Rust. You are a clown on a
 skateboard. Green zombies shamble after you through a parking lot. Shoot them
@@ -61,10 +65,11 @@ feature is off), so there is no ALSA dependency.
 2. **Shoot** a zombie and it goes down for good. The HUD counts them.
 3. Stand next to **any car** (they all have a green beacon) and press **E** to
    get in. No zombies needed.
-4. **The Strip.** Drive down the boulevard and run zombies over: a moving car
-   kills them and loses a little speed doing it. Barriers, vans and traffic
-   cabinets are solid. **F** bails out at any time (**E** next to a car gets
-   you back in).
+4. **The Strip.** Groups of zombies are waiting all the way down the boulevard.
+   Run them over: a moving car kills them and loses a little speed doing it.
+   Barriers, vans and traffic cabinets are solid. Press **F** to get out (the
+   car stops and waits) and shoot them from the board; **E** next to a car gets
+   you back in.
 5. Cross the glowing **finish arch** in a car to win.
 
 ## Code map (read in this order)

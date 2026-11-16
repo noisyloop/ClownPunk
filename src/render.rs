@@ -591,7 +591,7 @@ fn panel(x: f32, y: f32, w: f32, h: f32, border: Color) {
 
 fn objective(g: &Game) -> String {
     if let Some(ci) = g.drive {
-        format!("Drive to the FINISH ARCH!  {:.0} m to go", (world::FINISH_X - g.cars[ci].pos.x).max(0.0))
+        format!("FINISH ARCH {:.0} m away. Run them over, or F to get out and shoot", (world::FINISH_X - g.cars[ci].pos.x).max(0.0))
     } else {
         "Shoot zombies (click). Press E next to any car to get in and drive".to_owned()
     }
