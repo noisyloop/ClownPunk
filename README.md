@@ -15,9 +15,9 @@ Pick your system, unpack, and run `clown_skate_zombie_haul`:
 
 | System | Download |
 |--------|----------|
-| Windows (64-bit) | [clown-skate-zombie-haul-windows-x86_64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-windows-x86_64.zip) |
-| macOS (Apple Silicon) | [clown-skate-zombie-haul-macos-arm64.tar.gz](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-macos-arm64.tar.gz) |
-| Linux (64-bit) | [clown-skate-zombie-haul-linux-x86_64.tar.gz](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-linux-x86_64.tar.gz) |
+| Windows (64-bit) | [clown-skate-zombie-haul-windows-x64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-windows-x64.zip) |
+| macOS (Apple Silicon) | [clown-skate-zombie-haul-macos-arm64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-macos-arm64.zip) |
+| Linux (64-bit) | [clown-skate-zombie-haul-linux-x64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-linux-x64.zip) |
 
 All releases: <https://github.com/noisyloop/ClownPunk/releases>
 
