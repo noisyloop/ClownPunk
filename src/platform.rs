@@ -6,6 +6,7 @@
 //!   * the 3D camera and box/sphere drawing   (`set_camera`, `draw_box`, ...)
 //!   * 2D HUD drawing and text                (`draw_rect`, `draw_text`, ...)
 //!   * random numbers                         (`rand_range`)
+//!   * looping background music               (`start_music`, `toggle_music`)
 //!
 //! To port the game to your own winit + wgpu engine, re-implement exactly the
 //! public functions in this file. No other module needs to change.
@@ -19,7 +20,7 @@ use std::cell::RefCell;
 /// Opens the window and runs `app` (an async fn that loops on `next_frame`).
 pub fn run<F: std::future::Future<Output = ()> + 'static>(app: F) {
     let conf = mq::window::Conf {
-        window_title: "Clown Skate Zombie Haul".to_owned(),
+        window_title: "ClownPunk".to_owned(),
         window_width: 1280,
         window_height: 720,
         sample_count: 4,
@@ -72,6 +73,7 @@ pub struct Input {
     pub pause: bool,    // (edge) Esc
     pub restart: bool,  // (edge) R
     pub quit: bool,     // (edge) Q, only acted upon in menus
+    pub music: bool,    // (edge) M, toggles the music
     /// Mouse movement this frame in pixels (+x right, +y down); 0 unless captured.
     pub look_dx: f32,
     pub look_dy: f32,
@@ -90,6 +92,7 @@ impl Input {
         self.pause = false;
         self.restart = false;
         self.quit = false;
+        self.music = false;
         self.look_dx = 0.0;
         self.look_dy = 0.0;
     }
@@ -150,9 +153,41 @@ pub fn poll_input() -> Input {
         pause: is_key_pressed(KeyCode::Escape),
         restart: is_key_pressed(KeyCode::R),
         quit: is_key_pressed(KeyCode::Q),
+        music: is_key_pressed(KeyCode::M),
         look_dx: dx,
         look_dy: dy,
     }
+}
+
+// ----------------------------------------------------------------- music ---
+
+const MUSIC_VOLUME: f32 = 0.45;
+
+thread_local! {
+    /// The looping soundtrack and whether it is currently audible.
+    static MUSIC: RefCell<Option<(mq::audio::Sound, bool)>> = const { RefCell::new(None) };
+}
+
+/// Start looping a WAV soundtrack. Music is optional: if the sound system
+/// can't decode it or there is no audio device, the game just stays quiet.
+pub async fn start_music(wav: &[u8]) {
+    if env("CLOWNPUNK_NO_MUSIC").is_some() {
+        return;
+    }
+    if let Ok(sound) = mq::audio::load_sound_from_bytes(wav).await {
+        mq::audio::play_sound(&sound, mq::audio::PlaySoundParams { looped: true, volume: MUSIC_VOLUME });
+        MUSIC.with(|m| *m.borrow_mut() = Some((sound, true)));
+    }
+}
+
+/// Mute / unmute the soundtrack (M key).
+pub fn toggle_music() {
+    MUSIC.with(|m| {
+        if let Some((sound, on)) = m.borrow_mut().as_mut() {
+            *on = !*on;
+            mq::audio::set_sound_volume(sound, if *on { MUSIC_VOLUME } else { 0.0 });
+        }
+    });
 }
 
 // ---------------------------------------------------------------- random ---
@@ -302,6 +337,46 @@ pub fn draw_box(center: Vec3, size: Vec3, rot: &Mat3, color: Color, mat: Mat) {
                 m.vertices.push(mq::models::Vertex::new(c.x, c.y, c.z, 0.0, 0.0, to_mq(fogged)));
             }
             m.indices.extend_from_slice(&[start, start + 1, start + 2, start, start + 2, start + 3]);
+        }
+        mq::models::draw_mesh(&m);
+    });
+}
+
+/// A smooth lit ellipsoid with the same shading and fog as `draw_box`: `radii`
+/// are the half-sizes along the model axes, `rot` orients them. A cheap way to
+/// get round heads, limbs, wheels and leaves instead of blocks.
+pub fn draw_blob(center: Vec3, radii: Vec3, rot: &Mat3, color: Color, mat: Mat) {
+    const RINGS: usize = 8;
+    const SEGS: usize = 12;
+    let cam = CAM.with(|c| c.borrow().pos);
+    let light = LIGHT_DIR.norm();
+    MESH.with(|m| {
+        let mut m = m.borrow_mut();
+        m.vertices.clear();
+        m.indices.clear();
+        for r in 0..=RINGS {
+            let theta = std::f32::consts::PI * r as f32 / RINGS as f32;
+            for s in 0..=SEGS {
+                let phi = std::f32::consts::TAU * s as f32 / SEGS as f32;
+                let u = Vec3::new(theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin());
+                let pos = center + rot.mul_vec(Vec3::new(u.x * radii.x, u.y * radii.y, u.z * radii.z));
+                let n = rot.mul_vec(Vec3::new(u.x / radii.x, u.y / radii.y, u.z / radii.z)).norm();
+                let d = (pos - cam).len();
+                let t = ((d - FOG_START) / (FOG_END - FOG_START)).clamp(0.0, 1.0);
+                let col = match mat {
+                    Mat::Lit => color.scale(0.58 + 0.5 * n.dot(light).max(0.0)).lerp(FOG_COLOR, t),
+                    Mat::Glow => color.lerp(FOG_COLOR, t * 0.7),
+                    Mat::Sky => color,
+                };
+                m.vertices.push(mq::models::Vertex::new(pos.x, pos.y, pos.z, 0.0, 0.0, to_mq(col)));
+            }
+        }
+        for r in 0..RINGS {
+            for s in 0..SEGS {
+                let a = (r * (SEGS + 1) + s) as u16;
+                let b = a + (SEGS + 1) as u16;
+                m.indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
+            }
         }
         mq::models::draw_mesh(&m);
     });

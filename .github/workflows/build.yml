@@ -7,8 +7,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege: builds only read the repo. Only the release job below can write.
 permissions:
-  contents: write # needed to attach files to a GitHub Release on tags
+  contents: read
 
 jobs:
   build:
@@ -18,13 +19,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-x64,     os: ubuntu-latest,  exe: clown_skate_zombie_haul }
-          - { name: windows-x64,   os: windows-latest, exe: clown_skate_zombie_haul.exe }
-          - { name: macos-arm64,   os: macos-latest,   exe: clown_skate_zombie_haul }
+          - { name: linux-x64,     os: ubuntu-latest,  exe: clownpunk }
+          - { name: windows-x64,   os: windows-latest, exe: clownpunk.exe }
+          - { name: macos-arm64,   os: macos-latest,   exe: clownpunk }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+
+      - name: Install ALSA headers (music)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - name: Test
         run: cargo test --release
@@ -40,33 +45,36 @@ jobs:
           cp "target/release/${{ matrix.exe }}" dist/
           chmod +x "dist/${{ matrix.exe }}"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            (cd dist && 7z a -tzip "../clown-skate-zombie-haul-${{ matrix.name }}.zip" "${{ matrix.exe }}" > /dev/null)
+            (cd dist && 7z a -tzip "../clownpunk-${{ matrix.name }}.zip" "${{ matrix.exe }}" > /dev/null)
           else
-            (cd dist && zip -9 "../clown-skate-zombie-haul-${{ matrix.name }}.zip" "${{ matrix.exe }}")
+            (cd dist && zip -9 "../clownpunk-${{ matrix.name }}.zip" "${{ matrix.exe }}")
           fi
-          echo "ASSET=clown-skate-zombie-haul-${{ matrix.name }}.zip" >> "$GITHUB_ENV"
+          echo "ASSET=clownpunk-${{ matrix.name }}.zip" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: clown-skate-zombie-haul-${{ matrix.name }}
+          name: clownpunk-${{ matrix.name }}
           path: ${{ env.ASSET }}
 
   # Publishes the three archives as a public GitHub Release so anyone can
-  # download them without a GitHub login. Pushes to main / this branch update
-  # the rolling "latest" release; pushing a v* tag makes a permanent release.
+  # download them without a GitHub login. Pushes to main update the rolling
+  # "latest" release; pushing a v* tag makes a permanent release.
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload the zips
     if: >-
       github.event_name == 'push' && (
         startsWith(github.ref, 'refs/tags/v') ||
-        github.ref_name == 'main' ||
-        github.ref_name == 'claude/clown-skateboard-zombie-0i0wy6')
+        github.ref_name == 'main')
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,11 +82,11 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             gh release create "$GITHUB_REF_NAME" dist/* --repo "$REPO" \
-              --title "Clown Skate Zombie Haul $GITHUB_REF_NAME" --generate-notes
+              --title "ClownPunk $GITHUB_REF_NAME" --generate-notes
           else
             # Rolling release: replace the old one so the tag moves to this commit.
             gh release delete latest --cleanup-tag -y --repo "$REPO" || true
             gh release create latest dist/* --repo "$REPO" --target "$GITHUB_SHA" \
               --title "Latest build" \
-              --notes "Automatic build of commit $GITHUB_SHA. Unpack and run clown_skate_zombie_haul."
+              --notes "Automatic build of commit $GITHUB_SHA. Unpack and run clownpunk."
           fi

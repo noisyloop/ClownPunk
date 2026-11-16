@@ -1,10 +1,10 @@
 [package]
-name = "clown_skate_zombie_haul"
+name = "clownpunk"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-macroquad = "0.4"
+macroquad = { version = "0.4", features = ["audio"] }
 
 [profile.release]
 opt-level = 3

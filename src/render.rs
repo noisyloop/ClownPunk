@@ -283,7 +283,7 @@ fn draw_streetlight(pr: &Prop) {
     let dark = Color::rgb(0.2, 0.2, 0.28);
     p::draw_box(at(Vec3::new(0.0, 3.5, 0.0)), Vec3::new(0.25, 7.0, 0.25), &m, dark, Mat::Lit);
     p::draw_box(at(Vec3::new(1.2, 6.9, 0.0)), Vec3::new(2.4, 0.18, 0.18), &m, dark, Mat::Lit);
-    p::draw_box(at(Vec3::new(2.3, 6.78, 0.0)), Vec3::new(0.9, 0.22, 0.55), &m, pr.color, Mat::Glow);
+    p::draw_blob(at(Vec3::new(2.3, 6.78, 0.0)), Vec3::new(0.5, 0.17, 0.32), &m, pr.color, Mat::Glow);
     // Faint pool of light on the sidewalk below the lamp.
     p::draw_box(at(Vec3::new(2.3, 0.03, 0.0)), Vec3::new(5.0, 0.02, 5.0), &m, Color::rgb(0.22, 0.15, 0.28), Mat::Glow);
 }
@@ -296,7 +296,7 @@ fn draw_palm(pr: &Prop) {
         let c = Vec3::new(pr.pos.x + lean.x * kf * kf * 0.25, 0.65 + kf * 1.25, pr.pos.y + lean.y * kf * kf * 0.25);
         let wdt = 0.55 - kf * 0.05;
         let shade = if k % 2 == 0 { 0.42 } else { 0.34 };
-        p::draw_aabb(c, Vec3::new(wdt, 1.3, wdt), Color::rgb(shade, shade * 0.62, 0.17), Mat::Lit);
+        p::draw_blob(c, Vec3::new(wdt * 0.55, 0.72, wdt * 0.55), &Mat3::IDENTITY, Color::rgb(shade, shade * 0.62, 0.17), Mat::Lit);
         top = c + Y * 0.65;
     }
     for j in 0..7 {
@@ -304,7 +304,7 @@ fn draw_palm(pr: &Prop) {
         let m = Mat3::rot_y(-a).mul(&Mat3::rot_z(-0.5));
         let center = top + m.mul_vec(Vec3::new(1.65, 0.0, 0.0));
         let g = 0.55 + 0.15 * (j % 2) as f32;
-        p::draw_box(center, Vec3::new(3.3, 0.12, 0.9), &m, Color::rgb(0.08, g, 0.3), Mat::Lit);
+        p::draw_blob(center, Vec3::new(1.7, 0.09, 0.5), &m, Color::rgb(0.08, g, 0.3), Mat::Lit);
     }
 }
 
@@ -393,8 +393,9 @@ fn draw_car(c: &Car, driven: bool, t: f32) {
 
     if !driven {
         // Cabin: glass block + roof. Skipped while driving so we can see out.
-        put(Vec3::new(-0.2, 1.38, 0.0), Vec3::new(2.3, 0.65, 1.8), Color::rgb(0.12, 0.2, 0.32), Mat::Lit);
-        put(Vec3::new(-0.2, 1.74, 0.0), Vec3::new(2.1, 0.1, 1.7), body, Mat::Lit);
+        let blob = |l: Vec3, r: Vec3, col: Color| p::draw_blob(base + m.mul_vec(l), r, &m, col, Mat::Lit);
+        blob(Vec3::new(-0.2, 1.36, 0.0), Vec3::new(1.3, 0.42, 0.93), Color::rgb(0.12, 0.2, 0.32));
+        blob(Vec3::new(-0.2, 1.66, 0.0), Vec3::new(1.15, 0.16, 0.86), body);
     }
     // Door handle on the driver side (left, -Z) so you can see where to stand.
     put(Vec3::new(0.4, 0.95, -1.03), Vec3::new(0.3, 0.06, 0.05), YELLOW, Mat::Glow);
@@ -414,7 +415,7 @@ fn draw_car(c: &Car, driven: bool, t: f32) {
         let spin = Mat3::rot_z(-c.wheel_spin / 0.35);
         let wm2 = wm.mul(&spin);
         let wc = base + m.mul_vec(Vec3::new(x, 0.35, z));
-        p::draw_box(wc, Vec3::new(0.72, 0.72, 0.3), &wm2, dark, Mat::Lit);
+        p::draw_blob(wc, Vec3::new(0.38, 0.38, 0.17), &wm2, dark, Mat::Lit);
         p::draw_box(wc + wm.mul_vec(Vec3::new(0.0, 0.0, z.signum() * 0.16)), Vec3::new(0.3, 0.3, 0.06), &wm2, YELLOW, Mat::Lit);
     }
 
@@ -437,12 +438,12 @@ fn draw_zombie(z: &Zombie) {
     let bob = if walking { (z.phase * 2.0).sin().abs() * 0.07 } else { 0.0 };
     let swing = if walking { z.phase.sin() * 0.65 } else { 0.0 };
 
-    let part = |c: Vec3, s: Vec3, col: Color| p::draw_box(origin + m.mul_vec(c), s, &m, col, Mat::Lit);
+    let part = |c: Vec3, s: Vec3, col: Color| p::draw_blob(origin + m.mul_vec(c), s * 0.56, &m, col, Mat::Lit);
     // A limb hanging from `pivot`, rotated by `ang` about the body's side axis.
     let limb = |pivot: Vec3, len: f32, s: Vec3, ang: f32, col: Color| {
         let r = Mat3::rot_z(ang);
         let c = pivot + r.mul_vec(Vec3::new(0.0, -len * 0.5, 0.0));
-        p::draw_box(origin + m.mul_vec(c), s, &m.mul(&r), col, Mat::Lit);
+        p::draw_blob(origin + m.mul_vec(c), s * 0.56, &m.mul(&r), col, Mat::Lit);
     };
 
     let skin = LIME;
@@ -497,19 +498,19 @@ fn draw_viewmodel_foot(game: &Game, cam: &CamView) {
     p::draw_box(on_board(Vec3::new(0.44, 0.003, 0.0)), Vec3::new(0.12, 0.049, 0.32), &bm, RED, Mat::Lit);
     p::draw_box(on_board(Vec3::new(-0.44, 0.003, 0.0)), Vec3::new(0.12, 0.049, 0.32), &bm, YELLOW, Mat::Lit);
     for (x, z) in [(0.3, 0.18), (0.3, -0.18), (-0.3, 0.18), (-0.3, -0.18)] {
-        p::draw_box(on_board(Vec3::new(x, -0.06, z)), Vec3::new(0.11, 0.09, 0.06), &bm, YELLOW, Mat::Lit);
+        p::draw_blob(on_board(Vec3::new(x, -0.06, z)), Vec3::new(0.06, 0.055, 0.04), &bm, YELLOW, Mat::Lit);
     }
     // Giant clown shoes planted across the board.
     for (x, z) in [(0.17, 0.0), (-0.17, 0.0)] {
-        p::draw_box(on_board(Vec3::new(x, 0.08, z)), Vec3::new(0.12, 0.1, 0.30), &bm, RED, Mat::Lit);
-        p::draw_box(on_board(Vec3::new(x, 0.08, z + 0.17)), Vec3::new(0.12, 0.11, 0.06), &bm, YELLOW, Mat::Lit);
+        p::draw_blob(on_board(Vec3::new(x, 0.08, z)), Vec3::new(0.09, 0.065, 0.18), &bm, RED, Mat::Lit);
+        p::draw_blob(on_board(Vec3::new(x, 0.08, z + 0.17)), Vec3::new(0.07, 0.06, 0.05), &bm, YELLOW, Mat::Lit);
     }
 
     // Left hand: blue sleeve, red cuff, white glove.
     let lh = |l: Vec3| place(-0.30, -0.30 + skate_bob, 0.55) + b.mul_vec(l);
     p::draw_box(lh(Vec3::new(-0.22, -0.05, -0.04)), Vec3::new(0.3, 0.11, 0.11), &b, BLUE, Mat::Lit);
     p::draw_box(lh(Vec3::new(-0.07, -0.03, -0.02)), Vec3::new(0.04, 0.14, 0.14), &b, RED, Mat::Lit);
-    p::draw_box(lh(Vec3::ZERO), Vec3::new(0.12, 0.12, 0.12), &b, WHITE, Mat::Lit);
+    p::draw_blob(lh(Vec3::ZERO), Vec3::new(0.075, 0.075, 0.075), &b, WHITE, Mat::Lit);
 
     // Right hand + pistol. The gun rotates by the same wobble that perturbs the bullets.
     let (wy, wp) = pl.wobble();
@@ -517,7 +518,7 @@ fn draw_viewmodel_foot(game: &Game, cam: &CamView) {
     let gm = b.mul(&Mat3::rot_y(-wy)).mul(&Mat3::rot_z(wp + kick * 0.5));
     let gc = place(0.24, -0.24 + skate_bob + kick * 0.03, 0.62 - kick * 0.1);
     let g = |l: Vec3, s: Vec3, c: Color, mat: Mat| p::draw_box(gc + gm.mul_vec(l), s, &gm, c, mat);
-    g(Vec3::new(-0.03, -0.06, 0.0), Vec3::new(0.12, 0.12, 0.12), WHITE, Mat::Lit);
+    p::draw_blob(gc + gm.mul_vec(Vec3::new(-0.03, -0.06, 0.0)), Vec3::new(0.075, 0.075, 0.075), &gm, WHITE, Mat::Lit);
     g(Vec3::new(-0.2, -0.07, 0.0), Vec3::new(0.28, 0.10, 0.10), BLUE, Mat::Lit);
     g(Vec3::new(-0.06, -0.06, 0.0), Vec3::new(0.04, 0.14, 0.14), RED, Mat::Lit);
     g(Vec3::new(0.09, 0.03, 0.0), Vec3::new(0.2, 0.08, 0.07), RED, Mat::Lit);
@@ -706,7 +707,8 @@ fn draw_labels(g: &Game) {
 
 fn clown_title(text: &str, cx: f32, y: f32, size: f32, t: f32) {
     let colors = [RED, YELLOW, BLUE];
-    let widths: Vec<f32> = text.chars().map(|c| p::text_width(&c.to_string(), size).max(size * 0.35)).collect();
+    // Fixed advance (the font is monospaced) so big letters never collide.
+    let widths: Vec<f32> = text.chars().map(|_| size * 0.52).collect();
     let total: f32 = widths.iter().sum();
     let mut x = cx - total * 0.5;
     for (i, ch) in text.chars().enumerate() {
@@ -728,14 +730,14 @@ fn draw_title(g: &Game) {
     let sz = p::screen_size();
     let cx = sz.x * 0.5;
     dim_screen();
-    clown_title("CLOWN SKATE", cx, sz.y * 0.24, 92.0 * s, g.anim_time);
-    clown_title("ZOMBIE HAUL", cx, sz.y * 0.24 + 92.0 * s, 92.0 * s, g.anim_time + 1.0);
+    clown_title("CLOWNPUNK", cx, sz.y * 0.28, 120.0 * s, g.anim_time);
+    shadow_text_c("skate. shoot. squash.", cx, sz.y * 0.28 + 52.0 * s, 32.0 * s, Color::rgb(1.0, 0.15, 0.7));
     let lines = [
         "Shoot the zombies, jump in any car, run them over and drive the Strip to the finish!",
         "",
         "W / S  push / brake      A / D or mouse  turn      SPACE  ollie",
         "LEFT CLICK  shoot      E  get in a car (stand next to it)",
-        "F  get out of car      ESC  pause      R  restart",
+        "F  get out of car      M  music on/off      ESC  pause      R  restart",
     ];
     let mut y = sz.y * 0.56;
     for l in lines {

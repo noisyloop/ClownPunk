@@ -1,4 +1,4 @@
-//! Clown Skate Zombie Haul - entry point and the fixed-timestep loop.
+//! ClownPunk - entry point and the fixed-timestep loop.
 //!
 //! The simulation always advances in exact 1/60 s steps (`TICK`), no matter how
 //! fast frames are rendered: each frame we add the elapsed real time to an
@@ -8,6 +8,7 @@ mod car;
 mod collision;
 mod icon;
 mod math;
+mod music;
 mod platform;
 mod player;
 mod render;
@@ -22,6 +23,7 @@ const TICK: f32 = 1.0 / 60.0;
 
 async fn app() {
     platform::seed_rng();
+    platform::start_music(&music::wav_bytes()).await;
     let mut game = Game::new();
     let mut accumulator = 0.0f32;
     let mut input = platform::Input::default();
@@ -30,16 +32,14 @@ async fn app() {
     let mut smoke = smoke::Smoke::from_env();
 
     loop {
-        if let Some(sm) = &mut smoke {
-            if sm.step(&mut input) {
-                break;
-            }
-        }
         // Mouse lock follows the game mode (locked while playing).
         platform::set_mouse_captured(game.wants_mouse_capture());
 
         // Merge this frame's input with any leftover one-shot events.
         let fresh = platform::poll_input();
+        if fresh.music {
+            platform::toggle_music();
+        }
         input.forward = fresh.forward;
         input.back = fresh.back;
         input.left = fresh.left;
@@ -54,6 +54,13 @@ async fn app() {
         input.quit |= fresh.quit;
         input.look_dx += fresh.look_dx;
         input.look_dy += fresh.look_dy;
+
+        // The smoke test scripts input on top of the real thing.
+        if let Some(sm) = &mut smoke {
+            if sm.step(&mut input, &mut game) {
+                break;
+            }
+        }
 
         accumulator += platform::frame_time();
         while accumulator >= TICK {
