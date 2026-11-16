@@ -1,4 +1,8 @@
-# Clown Skate Zombie Haul
+<p align="center">
+  <img src="docs/clown.png" alt="The clown" width="160">
+</p>
+
+<h1 align="center">Clown Skate Zombie Haul</h1>
 
 A small offline first-person 3D game sketch in Rust. You are a clown on a
 skateboard. Green zombies shamble after you through a parking lot. Shoot them
