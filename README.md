@@ -1,8 +1,8 @@
 # Clown Skate Zombie Haul
 
 A small offline first-person 3D game sketch in Rust. You are a clown on a
-skateboard. Green zombies shamble after you through a parking lot. Stun them
-with a wobbly toy pistol, load three into a car trunk, then drive the neon
+skateboard. Green zombies shamble after you through a parking lot. Shoot them
+with a wobbly toy pistol (or run them over), jump in any car, then drive the neon
 Las-Vegas-style Strip to the finish arch. A run takes about 5 minutes.
 
 Everything is drawn with coloured boxes and spheres: no assets, no textures.
@@ -46,8 +46,8 @@ feature is off), so there is no ALSA dependency.
 | **A** / **D**          | carve left / right                         | steer                   |
 | **Mouse**              | look (yaw + pitch); yaw also turns the board | look around the cabin |
 | **Space**              | ollie (small hop)                          | -                       |
-| **Left click**         | shoot the pistol (stun for 6 s)            | -                       |
-| **E**                  | pick up a stunned zombie / load a trunk (at the rear) / get into a ready car (at the driver door) | - |
+| **Left click**         | shoot the pistol                           | -                       |
+| **E**                  | get into the nearest car (stand next to it) | -                      |
 | **F**                  | -                                          | get out of the car      |
 | **Esc**                | pause / resume                             | pause / resume          |
 | **R**                  | restart (pause, Game Over and Win screens) | same                    |
@@ -57,20 +57,15 @@ feature is off), so there is no ALSA dependency.
 
 1. **Parking lot.** 6-8 zombies chase you. They are slower than your top speed
    but faster than you when you stand still, so keep moving. A zombie that
-   touches you costs 1 of 3 hearts and knocks you back (you also drop any
-   zombie you carry). 0 hearts = Game Over.
-2. **Shoot** a zombie: it is knocked flat and stunned for 6 s, then gets back
-   up. Zombies never die.
-3. **E** next to a stunned zombie picks it up (one at a time, and you skate
-   slower). **E** behind a car loads it into the trunk. The number over each
-   car is its trunk count.
-4. When one car holds **3 zombies** it glows green with a beacon, says READY,
-   and you can press **E** at its **driver door** (left side) to get in.
-5. **The Strip.** Drive down the boulevard. Zombies on the road slow you down
-   when you hit them; barriers, vans and traffic cabinets are solid. **F**
-   bails out at any time (the car keeps your zombies; **E** at its door gets you
-   back in).
-6. Cross the glowing **finish arch** in the car with 3 zombies in the trunk to win.
+   touches you costs 1 of 3 hearts and knocks you back. 0 hearts = Game Over.
+2. **Shoot** a zombie and it goes down for good. The HUD counts them.
+3. Stand next to **any car** (they all have a green beacon) and press **E** to
+   get in. No zombies needed.
+4. **The Strip.** Drive down the boulevard and run zombies over: a moving car
+   kills them and loses a little speed doing it. Barriers, vans and traffic
+   cabinets are solid. **F** bails out at any time (**E** next to a car gets
+   you back in).
+5. Cross the glowing **finish arch** in a car to win.
 
 ## Code map (read in this order)
 
@@ -79,8 +74,8 @@ feature is off), so there is no ALSA dependency.
 | `src/main.rs` | Entry point and the **fixed-timestep loop** (60 Hz ticks fed by an accumulator). |
 | `src/state.rs` | The **game state machine** (`Mode`) and the per-tick simulation that connects everything: shooting, interactions, zombie contact, win/lose. Also holds the tests. |
 | `src/player.rs` | **Skateboard movement**: heading vs velocity, grip and drift, ollie, mouse look, gun wobble. |
-| `src/car.rs` | Arcade **car driving** and the trunk. |
-| `src/zombies.rs` | Zombie **AI states** (walk / stunned / carried / in trunk) and bullet hit volumes. |
+| `src/car.rs` | Arcade **car driving**. |
+| `src/zombies.rs` | Zombie **AI states** (walking / dead) and bullet hit volumes. |
 | `src/world.rs` | The static level: lot, Strip, casinos, lamps, palms, obstacles. |
 | `src/collision.rs` | **Collision and raycasting**: circle-vs-oriented-box push-out, ray-vs-box (slab), ray-vs-sphere. |
 | `src/render.rs` | Draws the scene, first-person hands/board/dashboard, HUD and menus, using only `platform`. |
@@ -117,7 +112,7 @@ is cheap to reproduce in a wgpu vertex shader.
 ### Tuning
 
 Most feel parameters are plain constants at the top of `player.rs`, `car.rs`,
-`zombies.rs` and `state.rs` (top speed, zombie speed, stun time, shot cooldown,
+`zombies.rs` and `state.rs` (top speed, zombie speed, shot cooldown,
 interaction range, ...), and `world.rs` (Strip length, obstacle density).
 
 ## Tests
@@ -126,9 +121,9 @@ interaction range, ...), and `world.rs` (Strip length, obstacle density).
 cargo test --release
 ```
 
-The tests run the real simulation without a window: shoot -> stun -> wake up,
-walls blocking bullets, the whole pick-up / load / drive / finish flow,
-damage and Game Over, carrying speed, roadkill, pause, and the collision maths.
+The tests run the real simulation without a window: shoot -> dead,
+walls blocking bullets, get in any car / drive / finish,
+damage and Game Over, skater top speed, roadkill, pause, and the collision maths.
 
 Headless screenshot smoke test (Linux, needs `xvfb`):
 

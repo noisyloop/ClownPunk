@@ -11,7 +11,7 @@ use crate::platform::{self as p, Mat};
 use crate::player::Player;
 use crate::state::{CamView, Game, Mode};
 use crate::world::{self, neon, Building, Prop, PropKind, World};
-use crate::zombies::{ZState, Zombie, RISE_TIME};
+use crate::zombies::{ZState, Zombie};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 const SKY: Color = Color::rgb(0.03, 0.01, 0.10);
@@ -42,7 +42,7 @@ pub fn draw(game: &Game) {
     }
     for z in &game.zombies {
         if (z.pos.x - cam.pos.x).abs() < 300.0 {
-            draw_zombie(z, t);
+            draw_zombie(z);
         }
     }
     for tr in &game.tracers {
@@ -388,16 +388,8 @@ fn draw_car(c: &Car, driven: bool, t: f32) {
     for z in [-0.95, 0.95] {
         put(Vec3::new(-1.75, 0.85, z), Vec3::new(0.9, 0.4, 0.12), body, Mat::Lit);
     }
-    // Zombies visible inside when the lid is up.
-    for k in 0..c.trunk {
-        let z = (k as f32 - 1.0) * 0.55;
-        put(Vec3::new(-1.75, 0.82, z), Vec3::new(0.5, 0.35, 0.5), LIME, Mat::Lit);
-    }
-    // Lid hinged at its front edge (x = -1.3); rotates up as trunk_open -> 1.
-    let lid_rot = Mat3::rot_z(-c.trunk_open * 1.15);
-    let lm = m.mul(&lid_rot);
-    let hinge = Vec3::new(-1.3, 1.03, 0.0);
-    p::draw_box(base + m.mul_vec(hinge) + lm.mul_vec(Vec3::new(-0.45, 0.0, 0.0)), Vec3::new(0.9, 0.07, 2.0), &lm, body, Mat::Lit);
+    // Closed trunk lid.
+    put(Vec3::new(-1.75, 1.03, 0.0), Vec3::new(0.9, 0.07, 2.0), body, Mat::Lit);
 
     if !driven {
         // Cabin: glass block + roof. Skipped while driving so we can see out.
@@ -426,8 +418,8 @@ fn draw_car(c: &Car, driven: bool, t: f32) {
         p::draw_box(wc + wm.mul_vec(Vec3::new(0.0, 0.0, z.signum() * 0.16)), Vec3::new(0.3, 0.3, 0.06), &wm2, YELLOW, Mat::Lit);
     }
 
-    // "Ready" beacon so you can spot a drivable car across the lot.
-    if c.drivable() && !driven {
+    // Beacon so you can spot a car across the lot.
+    if !driven {
         let k = 0.55 + 0.45 * pulse(t, 4.0, 0.0);
         p::draw_aabb(base + Vec3::new(0.0, 7.0, 0.0), Vec3::new(0.5, 10.0, 0.5), Color::rgb(0.3, 1.0, 0.4).scale(k), Mat::Glow);
     }
@@ -435,10 +427,7 @@ fn draw_car(c: &Car, driven: bool, t: f32) {
 
 // ============================================================== zombies ===
 
-fn draw_zombie(z: &Zombie, t: f32) {
-    if matches!(z.state, ZState::Carried | ZState::InTrunk) {
-        return;
-    }
+fn draw_zombie(z: &Zombie) {
     let tilt = z.tilt();
     let theta = tilt * FRAC_PI_2;
     // Body frame: face along yaw, then fall backwards about the feet.
@@ -475,16 +464,6 @@ fn draw_zombie(z: &Zombie, t: f32) {
     for (k, s) in [-1.0f32, 1.0].iter().enumerate() {
         let wob = if walking { (z.phase * 2.0 + k as f32 * PI).sin() * 0.12 } else { 0.0 };
         limb(Vec3::new(0.05, 1.32 + bob, s * 0.38), 0.7, Vec3::new(0.2, 0.7, 0.2), FRAC_PI_2 - 0.1 + wob, skin.scale(0.88));
-    }
-
-    // Cartoon stars circling the head while stunned.
-    if z.state == ZState::Stunned && z.stun > RISE_TIME {
-        let head = z.hit_spheres()[2].0;
-        for k in 0..3 {
-            let a = t * 5.0 + k as f32 * TAU / 3.0;
-            let c = head + Vec3::new(a.cos() * 0.5, 0.55, a.sin() * 0.5);
-            p::draw_aabb(c, Vec3::new(0.14, 0.14, 0.14), YELLOW, Mat::Glow);
-        }
     }
 }
 
@@ -549,15 +528,6 @@ fn draw_viewmodel_foot(game: &Game, cam: &CamView) {
         g(Vec3::new(0.46, 0.04, 0.0), Vec3::new(0.2, 0.2, 0.03), Color::rgb(1.0, 0.95, 0.4), Mat::Glow);
         g(Vec3::new(0.46, 0.04, 0.0), Vec3::new(0.2, 0.03, 0.2), Color::rgb(1.0, 0.7, 0.2), Mat::Glow);
     }
-
-    // A zombie slung over the shoulder while carrying.
-    if let Some(ci) = game.carrying {
-        let cz = |l: Vec3| place(-0.5, -0.4, 0.85) + b.mul_vec(l);
-        p::draw_box(cz(Vec3::ZERO), Vec3::new(0.3, 0.3, 0.6), &b, game.zombies[ci].shirt, Mat::Lit);
-        p::draw_box(cz(Vec3::new(0.0, -0.04, 0.42)), Vec3::new(0.26, 0.26, 0.26), &b, LIME, Mat::Lit);
-        p::draw_box(cz(Vec3::new(0.0, 0.04, -0.45)), Vec3::new(0.26, 0.2, 0.34), &b, Color::rgb(0.28, 0.22, 0.45), Mat::Lit);
-        p::draw_box(cz(Vec3::new(0.2, -0.25, 0.2)), Vec3::new(0.11, 0.4, 0.11), &b, LIME.scale(0.85), Mat::Lit);
-    }
 }
 
 /// Inside the car: dash, a clown-coloured steering wheel that turns with
@@ -621,18 +591,9 @@ fn panel(x: f32, y: f32, w: f32, h: f32, border: Color) {
 
 fn objective(g: &Game) -> String {
     if let Some(ci) = g.drive {
-        let c = &g.cars[ci];
-        if c.trunk >= car::CAPACITY {
-            format!("Drive to the FINISH ARCH!  {:.0} m to go", (world::FINISH_X - c.pos.x).max(0.0))
-        } else {
-            format!("This trunk only has {}/{}. Press F to get out and fetch more", c.trunk, car::CAPACITY)
-        }
-    } else if g.carrying.is_some() {
-        "Carry the zombie to a car. Press E behind it to load the trunk".to_owned()
-    } else if g.cars.iter().any(|c| c.drivable()) {
-        "A car is READY! Press E at its driver door (left side)".to_owned()
+        format!("Drive to the FINISH ARCH!  {:.0} m to go", (world::FINISH_X - g.cars[ci].pos.x).max(0.0))
     } else {
-        format!("Shoot zombies (click), pick up with E, load 3 into one trunk  [{}/{}]", g.best_trunk(), car::CAPACITY)
+        "Shoot zombies (click). Press E next to any car to get in and drive".to_owned()
     }
 }
 
@@ -649,7 +610,7 @@ fn draw_hud(g: &Game) {
     // Crosshair (hidden while driving: nothing to aim).
     if g.drive.is_none() {
         let cy = sz.y * 0.5;
-        let col = if g.carrying.is_some() { LIME } else { WHITE };
+        let col = WHITE;
         for (dx, dy, w, h) in [(-14.0, -1.5, 10.0, 3.0), (4.0, -1.5, 10.0, 3.0), (-1.5, -14.0, 3.0, 10.0), (-1.5, 4.0, 3.0, 10.0)] {
             p::draw_rect(cx + dx * s - 1.0, cy + dy * s - 1.0, w * s + 2.0, h * s + 2.0, Color::rgba(0.0, 0.0, 0.0, 0.7));
             p::draw_rect(cx + dx * s, cy + dy * s, w * s, h * s, col);
@@ -669,13 +630,9 @@ fn draw_hud(g: &Game) {
             p::draw_ring(x, y, 15.0 * s, 3.0, Color::rgba(0.9, 0.3, 0.3, 0.5));
         }
     }
-    // Zombies in trunk.
-    let trunk = match g.drive {
-        Some(ci) => g.cars[ci].trunk,
-        None => g.best_trunk(),
-    };
+    // Kill counter.
     p::draw_rect(12.0 * s, 70.0 * s, 330.0 * s, 32.0 * s, Color::rgba(0.04, 0.0, 0.1, 0.7));
-    shadow_text(&format!("ZOMBIES IN TRUNK  {}/{}", trunk, car::CAPACITY), 20.0 * s, 94.0 * s, 26.0 * s, LIME);
+    shadow_text(&format!("ZOMBIES DOWN  {}", g.kills), 20.0 * s, 94.0 * s, 26.0 * s, LIME);
 
     // Timer.
     let secs = g.run_time as u32;
@@ -725,7 +682,7 @@ fn draw_labels(g: &Game) {
             if dist > 70.0 {
                 continue;
             }
-            let (txt, col) = if c.drivable() { ("READY!".to_owned(), Color::rgb(0.3, 1.0, 0.4)) } else { (format!("{}/{}", c.trunk, car::CAPACITY), YELLOW) };
+            let (txt, col) = ("DRIVE!".to_owned(), Color::rgb(0.3, 1.0, 0.4));
             let size = (34.0 * s * (22.0 / dist.max(6.0)).clamp(0.55, 1.3)).max(16.0);
             let w = p::text_width(&txt, size);
             p::draw_rect(sp.x - w * 0.5 - 8.0, sp.y - size * 0.85, w + 16.0, size * 1.1, Color::rgba(0.0, 0.0, 0.0, 0.55));
@@ -774,10 +731,10 @@ fn draw_title(g: &Game) {
     clown_title("CLOWN SKATE", cx, sz.y * 0.24, 92.0 * s, g.anim_time);
     clown_title("ZOMBIE HAUL", cx, sz.y * 0.24 + 92.0 * s, 92.0 * s, g.anim_time + 1.0);
     let lines = [
-        "Skate, shoot zombies flat, load 3 into a car trunk, then drive the Strip to the finish!",
+        "Shoot the zombies, jump in any car, run them over and drive the Strip to the finish!",
         "",
         "W / S  push / brake      A / D or mouse  turn      SPACE  ollie",
-        "LEFT CLICK  shoot (stuns for 6 s)      E  pick up / load trunk / get in",
+        "LEFT CLICK  shoot      E  get in a car (stand next to it)",
         "F  get out of car      ESC  pause      R  restart",
     ];
     let mut y = sz.y * 0.56;
@@ -805,7 +762,7 @@ fn draw_game_over(g: &Game) {
     dim_screen();
     shadow_text_c("GAME OVER", sz.x * 0.5, sz.y * 0.4, 100.0 * s, RED);
     shadow_text_c("The zombies got the clown.", sz.x * 0.5, sz.y * 0.5, 34.0 * s, WHITE);
-    shadow_text_c(&format!("Survived {:.0}s with {}/{} in the best trunk", g.run_time, g.best_trunk(), car::CAPACITY), sz.x * 0.5, sz.y * 0.57, 26.0 * s, Color::rgb(0.8, 0.8, 0.9));
+    shadow_text_c(&format!("Survived {:.0}s and put down {} zombies", g.run_time, g.kills), sz.x * 0.5, sz.y * 0.57, 26.0 * s, Color::rgb(0.8, 0.8, 0.9));
     shadow_text_c("Press R to restart", sz.x * 0.5, sz.y * 0.7, 40.0 * s, YELLOW);
 }
 

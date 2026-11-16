@@ -23,9 +23,21 @@ pub fn run<F: std::future::Future<Output = ()> + 'static>(app: F) {
         window_width: 1280,
         window_height: 720,
         sample_count: 4,
+        icon: Some(window_icon()),
         ..Default::default()
     };
     mq::Window::from_config(conf, app);
+}
+
+fn window_icon() -> mq::miniquad::conf::Icon {
+    fn to_array<const N: usize>(size: usize) -> [u8; N] {
+        crate::icon::render(size).try_into().expect("icon size")
+    }
+    mq::miniquad::conf::Icon {
+        small: to_array::<{ 16 * 16 * 4 }>(16),
+        medium: to_array::<{ 32 * 32 * 4 }>(32),
+        big: to_array::<{ 64 * 64 * 4 }>(64),
+    }
 }
 
 /// Finish the frame (presents, polls OS events). Call once per loop iteration.

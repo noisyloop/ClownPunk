@@ -1,4 +1,4 @@
-//! Cars: parked in the lot, hold zombies in the trunk, and drive arcade-style.
+//! Cars: parked in the lot, and drive arcade-style.
 //!
 //! DRIVING MODEL (arcade, no real physics)
 //!   * one scalar `speed` along the heading; W/S change it, drag coasts it down
@@ -12,9 +12,8 @@ use crate::platform::Input;
 
 pub const HALF: Vec2 = Vec2::new(2.2, 1.0);
 pub const HEIGHT: f32 = 1.5;
-pub const CAPACITY: u8 = 3;
-pub const MAX_SPEED: f32 = 30.0;
-const MAX_REVERSE: f32 = 8.0;
+pub const MAX_SPEED: f32 = 18.0;
+const MAX_REVERSE: f32 = 5.0;
 const CIRCLE_R: f32 = 1.05;
 const CIRCLE_OFFSETS: [f32; 3] = [-1.15, 0.0, 1.15];
 
@@ -25,16 +24,12 @@ pub struct Car {
     /// Smoothed steering input, -1..1 (wheel visuals).
     pub steer: f32,
     pub color: Color,
-    pub trunk: u8,
-    /// 0 closed .. 1 fully open, animated toward `open_timer > 0`.
-    pub trunk_open: f32,
-    pub open_timer: f32,
     pub wheel_spin: f32,
 }
 
 impl Car {
     pub fn new(pos: Vec2, yaw: f32, color: Color) -> Car {
-        Car { pos, yaw, speed: 0.0, steer: 0.0, color, trunk: 0, trunk_open: 0.0, open_timer: 0.0, wheel_spin: 0.0 }
+        Car { pos, yaw, speed: 0.0, steer: 0.0, color, wheel_spin: 0.0 }
     }
 
     pub fn forward(&self) -> Vec2 {
@@ -46,20 +41,9 @@ impl Car {
     pub fn obb(&self) -> Obb {
         Obb::new(self.pos, HALF, self.yaw, HEIGHT)
     }
-    /// Where you stand to load the trunk (behind the rear bumper).
-    pub fn rear_point(&self) -> Vec2 {
-        self.pos - self.forward() * (HALF.x + 0.8)
-    }
     /// Driver door: left side, just ahead of the middle.
     pub fn door_point(&self) -> Vec2 {
         self.pos - self.right() * (HALF.y + 0.8) + self.forward() * 0.4
-    }
-    pub fn drivable(&self) -> bool {
-        self.trunk >= CAPACITY
-    }
-
-    pub fn open_trunk_briefly(&mut self) {
-        self.open_timer = 0.9;
     }
 
     /// Driver controls -> speed and heading. Returns impact speed if we hit something.
@@ -69,7 +53,7 @@ impl Car {
             if self.speed < 0.0 {
                 self.speed += 30.0 * dt; // braking out of reverse
             } else {
-                self.speed += 14.0 * (1.0 - 0.6 * self.speed / MAX_SPEED) * dt;
+                self.speed += 9.0 * (1.0 - 0.6 * self.speed / MAX_SPEED) * dt;
             }
         } else if input.back {
             self.speed -= if self.speed > 0.5 { 28.0 } else { 9.0 } * dt;
@@ -94,15 +78,6 @@ impl Car {
         if self.speed != 0.0 {
             self.integrate(dt, obstacles);
         }
-        self.open_timer = (self.open_timer - dt).max(0.0);
-        let target = if self.open_timer > 0.0 { 1.0 } else { 0.0 };
-        self.trunk_open = approach(self.trunk_open, target, dt * 4.0);
-    }
-
-    pub fn tick_trunk_anim(&mut self, dt: f32) {
-        self.open_timer = (self.open_timer - dt).max(0.0);
-        let target = if self.open_timer > 0.0 { 1.0 } else { 0.0 };
-        self.trunk_open = approach(self.trunk_open, target, dt * 4.0);
     }
 
     /// Move along the heading and collide. Returns the impact speed (0 if none).
