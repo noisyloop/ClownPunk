@@ -61,6 +61,10 @@ const SHOT_COOLDOWN: f32 = 0.35;
 const ENTER_RANGE: f32 = 4.2;
 const PLAYER_START: Vec2 = Vec2::new(-39.0, 0.0);
 pub const FOV_FOOT: f32 = 72.0;
+/// How far away Strip zombies notice you (a car covers this quickly).
+const STRIP_AGGRO: f32 = 32.0;
+/// Zombies farther than this from you aren't simulated (they just wait).
+const ACTIVE_RANGE: f32 = 120.0;
 
 pub struct Game {
     pub mode: Mode,
@@ -167,12 +171,18 @@ impl Game {
             self.zombies.push(Zombie::new(pos, 500.0));
             placed += 1;
         }
-        for _ in 0..9 {
-            let pos = Vec2::new(rand_range(world::STRIP_START + 60.0, world::FINISH_X - 40.0), rand_range(-11.0, 11.0));
-            let blocked = self.world.statics.iter().any(|o| o.push_out(pos, 1.2).is_some());
-            if !blocked {
-                self.zombies.push(Zombie::new(pos, 26.0));
+        // Groups of 1-3 shamblers all the way down the Strip, to shoot or run over.
+        let mut x = world::STRIP_START + 50.0;
+        while x < world::FINISH_X - 40.0 {
+            let group = 1 + (rand_range(0.0, 3.0) as usize); // 1..=3
+            for _ in 0..group {
+                let pos = Vec2::new(x + rand_range(-6.0, 6.0), rand_range(-11.0, 11.0));
+                let blocked = self.world.statics.iter().any(|o| o.push_out(pos, 1.2).is_some());
+                if !blocked {
+                    self.zombies.push(Zombie::new(pos, STRIP_AGGRO));
+                }
             }
+            x += rand_range(22.0, 40.0);
         }
     }
 
@@ -389,6 +399,7 @@ impl Game {
     }
 
     fn exit_car(&mut self, ci: usize) {
+        self.cars[ci].speed = 0.0; // handbrake: the car stays where you got out
         let car = &self.cars[ci];
         self.player.pos = car.door_point();
         self.player.yaw = car.yaw + self.cab_yaw;
@@ -397,7 +408,7 @@ impl Game {
         self.drive = None;
         let obstacles = self.obstacles(None);
         crate::collision::resolve_circle(&mut self.player.pos, player::RADIUS, &obstacles);
-        self.say("Back on the board. Press E next to a car to get in.", 3.0);
+        self.say("Out of the car. Shoot them! E next to a car to get back in.", 3.0);
     }
 
     // --------------------------------------------------------- zombies ---
@@ -449,14 +460,18 @@ impl Game {
             None => self.player.pos,
         };
         for z in &mut self.zombies {
-            z.update(dt, target, &obstacles);
+            if z.pos.dist(target) <= ACTIVE_RANGE {
+                z.update(dt, target, &obstacles);
+            }
         }
 
         // Soft separation so zombies don't stack into one blob.
         let n = self.zombies.len();
         for i in 0..n {
             for j in (i + 1)..n {
-                if self.zombies[i].state != ZState::Walking || self.zombies[j].state != ZState::Walking
+                if self.zombies[i].state != ZState::Walking
+                    || self.zombies[j].state != ZState::Walking
+                    || (self.zombies[i].pos.x - self.zombies[j].pos.x).abs() > 1.0
                 {
                     continue;
                 }
@@ -587,6 +602,45 @@ mod tests {
         g.zombies.push(z);
         tick(&mut g, &Input { shoot: true, ..Default::default() });
         assert_eq!(g.zombies[0].state, ZState::Walking);
+    }
+
+    #[test]
+    fn strip_is_full_of_zombies() {
+        for _ in 0..5 {
+            let g = Game::new();
+            let strip = g.zombies.iter().filter(|z| z.pos.x > world::STRIP_START).count();
+            assert!(strip >= 40, "strip zombies: {strip}");
+            // Spread along the whole road, not bunched at the start.
+            let far = g.zombies.iter().filter(|z| z.pos.x > world::FINISH_X - 300.0).count();
+            assert!(far >= 5, "zombies near the finish: {far}");
+        }
+    }
+
+    #[test]
+    fn getting_out_stops_the_car_and_lets_you_shoot() {
+        let mut g = arena();
+        g.cars.push(Car::new(Vec2::new(10.0, 0.0), 0.0, Color::rgb(1.0, 0.0, 0.0)));
+        g.drive = Some(0);
+        g.cars[0].speed = 18.0;
+        tick(&mut g, &Input { exit_car: true, ..Default::default() });
+        assert_eq!(g.drive, None);
+        assert_eq!(g.cars[0].speed, 0.0);
+        let mut z = Zombie::new(g.player.pos + Vec2::new(0.0, 8.0), 0.0);
+        z.speed = 0.0;
+        g.zombies.push(z);
+        g.player.yaw = std::f32::consts::FRAC_PI_2; // face +z, toward the zombie
+        g.player.pitch = 0.0;
+        // The wobble is random, so allow a few shots.
+        for _ in 0..30 {
+            tick(&mut g, &Input { shoot: true, ..Default::default() });
+            if g.zombies[0].state == ZState::Dead {
+                break;
+            }
+            for _ in 0..25 {
+                tick(&mut g, &Input::default());
+            }
+        }
+        assert_eq!(g.zombies[0].state, ZState::Dead);
     }
 
     #[test]
