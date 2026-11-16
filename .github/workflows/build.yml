@@ -18,9 +18,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-x86_64,   os: ubuntu-latest,  exe: clown_skate_zombie_haul,     archive: tar.gz }
-          - { name: windows-x86_64, os: windows-latest, exe: clown_skate_zombie_haul.exe, archive: zip }
-          - { name: macos-arm64,    os: macos-latest,   exe: clown_skate_zombie_haul,     archive: tar.gz }
+          - { name: linux-x64,     os: ubuntu-latest,  exe: clown_skate_zombie_haul }
+          - { name: windows-x64,   os: windows-latest, exe: clown_skate_zombie_haul.exe }
+          - { name: macos-arm64,   os: macos-latest,   exe: clown_skate_zombie_haul }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -35,15 +35,16 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          dir="clown-skate-zombie-haul-${{ matrix.name }}"
-          mkdir "$dir"
-          cp "target/release/${{ matrix.exe }}" README.md LICENSE "$dir/"
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            7z a "$dir.zip" "$dir" > /dev/null
+          # Same layout as AudioZero: a flat zip with the program at the top level.
+          mkdir dist
+          cp "target/release/${{ matrix.exe }}" dist/
+          chmod +x "dist/${{ matrix.exe }}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            (cd dist && 7z a -tzip "../clown-skate-zombie-haul-${{ matrix.name }}.zip" "${{ matrix.exe }}" > /dev/null)
           else
-            tar czf "$dir.tar.gz" "$dir"
+            (cd dist && zip -9 "../clown-skate-zombie-haul-${{ matrix.name }}.zip" "${{ matrix.exe }}")
           fi
-          echo "ASSET=$dir.${{ matrix.archive }}" >> "$GITHUB_ENV"
+          echo "ASSET=clown-skate-zombie-haul-${{ matrix.name }}.zip" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
