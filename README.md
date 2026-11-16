@@ -2,33 +2,49 @@
   <img src="docs/clown.png" alt="The clown" width="160">
 </p>
 
-<h1 align="center">Clown Skate Zombie Haul</h1>
+<h1 align="center">ClownPunk</h1>
 
-A small offline first-person 3D game sketch in Rust. You are a clown on a
-skateboard. Green zombies shamble after you through a parking lot. Shoot them
+**ClownPunk** is a small offline first-person 3D game written in Rust, with a punk
+soundtrack. You are a clown on a skateboard. Green zombies shamble after you through a parking lot. Shoot them
 with a wobbly toy pistol (or run them over), jump in any car, then drive the neon
 Las-Vegas-style Strip to the finish arch. A run takes about 5 minutes.
 
-Everything is drawn with coloured boxes and spheres: no assets, no textures.
-The only dependency is [macroquad](https://crates.io/crates/macroquad) (window,
-input, GL drawing, random numbers).
+Everything is drawn with coloured boxes and rounded blobs, and the music is
+synthesised at startup: no asset files, no textures, no samples. The only
+dependency is [macroquad](https://crates.io/crates/macroquad) (window, input,
+GL drawing, audio, random numbers).
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/title.png" alt="The ClownPunk title screen" width="720"><br>
+  <sub>The title screen, over the parking lot.</sub>
+</p>
+<p align="center">
+  <img src="docs/skate.png" alt="Skating down the neon Strip and shooting a zombie" width="720"><br>
+  <sub>Skating the neon Strip, shooting zombies with the wobbly pistol.</sub>
+</p>
+<p align="center">
+  <img src="docs/drive.png" alt="Driving a car through a zombie" width="720"><br>
+  <sub>Or jump in a car and run them over.</sub>
+</p>
 
 ## Download (no install, no Rust needed)
 
-Pick your system, unpack, and run `clown_skate_zombie_haul`:
+Pick your system, unpack, and run `clownpunk`:
 
 | System | Download |
 |--------|----------|
-| Windows (64-bit) | [clown-skate-zombie-haul-windows-x64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-windows-x64.zip) |
-| macOS (Apple Silicon) | [clown-skate-zombie-haul-macos-arm64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-macos-arm64.zip) |
-| Linux (64-bit) | [clown-skate-zombie-haul-linux-x64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clown-skate-zombie-haul-linux-x64.zip) |
+| Windows (64-bit) | [clownpunk-windows-x64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clownpunk-windows-x64.zip) |
+| macOS (Apple Silicon) | [clownpunk-macos-arm64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clownpunk-macos-arm64.zip) |
+| Linux (64-bit) | [clownpunk-linux-x64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clownpunk-linux-x64.zip) |
 
-All releases: <https://github.com/noisyloop/ClownPunk/releases>
+All releases: <https://github.com/noisyloop/ClownPunk/releases> (each release also lists SHA256 checksums in `SHA256SUMS.txt`).
 
 Notes: the builds are unsigned. Windows SmartScreen may say "unknown publisher"
 (More info > Run anyway). On macOS run
-`xattr -d com.apple.quarantine clown_skate_zombie_haul` once, then
-`./clown_skate_zombie_haul`. On Linux, `chmod +x` it if needed.
+`xattr -d com.apple.quarantine clownpunk` once, then
+`./clownpunk`. On Linux, `chmod +x` it if needed.
 
 [![Build](https://github.com/noisyloop/ClownPunk/actions/workflows/build.yml/badge.svg)](https://github.com/noisyloop/ClownPunk/actions/workflows/build.yml)
 
@@ -39,8 +55,10 @@ cargo run --release
 ```
 
 Linux needs the usual X11/OpenGL runtime libraries (`libx11`, `libxi`, `libgl`);
-macOS and Windows work out of the box. Audio is not used (macroquad's `audio`
-feature is off), so there is no ALSA dependency.
+macOS and Windows work out of the box. Music needs ALSA: `libasound2` to run and
+`libasound2-dev` to build (`sudo apt install libasound2-dev` on Debian/Ubuntu).
+With no sound device the game simply runs silent. Set `CLOWNPUNK_NO_MUSIC=1` to
+turn the music off.
 
 ## Controls
 
@@ -55,6 +73,7 @@ feature is off), so there is no ALSA dependency.
 | **F**                  | -                                          | get out of the car      |
 | **Esc**                | pause / resume                             | pause / resume          |
 | **R**                  | restart (pause, Game Over and Win screens) | same                    |
+| **M**                  | music on / off                             | same                    |
 | **Q**                  | quit (title and pause screens)             | same                    |
 
 ## How to play
@@ -86,6 +105,8 @@ feature is off), so there is no ALSA dependency.
 | `src/render.rs` | Draws the scene, first-person hands/board/dashboard, HUD and menus, using only `platform`. |
 | `src/platform.rs` | **The only file that calls macroquad.** Window, input, camera, drawing, random. |
 | `src/math.rs` | Tiny `Vec2` / `Vec3` / `Mat3` / `Color` so gameplay does not depend on any engine's types. |
+| `src/music.rs` | The **punk soundtrack**, synthesised in code (distorted power chords, bass, drums) and played on a loop. |
+| `src/icon.rs` | The clown **window / taskbar / .exe icon**, drawn in code. |
 | `src/smoke.rs` | Optional headless screenshot test (only active with an env var). |
 
 ### Conventions
@@ -133,7 +154,7 @@ damage and Game Over, skater top speed, roadkill, pause, and the collision maths
 Headless screenshot smoke test (Linux, needs `xvfb`):
 
 ```
-CLOWN_AUTOSHOT=/tmp/shot xvfb-run -a ./target/release/clown_skate_zombie_haul
+CLOWN_AUTOSHOT=/tmp/shot xvfb-run -a ./target/release/clownpunk
 ```
 
 ## Known simplifications (it is a sketch)
