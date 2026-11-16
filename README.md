@@ -9,7 +9,23 @@ Everything is drawn with coloured boxes and spheres: no assets, no textures.
 The only dependency is [macroquad](https://crates.io/crates/macroquad) (window,
 input, GL drawing, random numbers).
 
-## Run it
+## Download
+
+Prebuilt binaries (Linux x86_64, Windows x86_64, macOS Apple Silicon) are built by
+GitHub Actions:
+
+* **Releases:** <https://github.com/noisyloop/ClownPunk/releases/latest>
+  (published automatically when a `v*` tag is pushed)
+* **Latest CI build:** open the newest run on the
+  [Actions page](https://github.com/noisyloop/ClownPunk/actions/workflows/build.yml)
+  and download the artifact for your platform.
+
+Unpack and run `clown_skate_zombie_haul` (macOS may need
+`xattr -d com.apple.quarantine clown_skate_zombie_haul` since the build is unsigned).
+
+[![Build](https://github.com/noisyloop/ClownPunk/actions/workflows/build.yml/badge.svg)](https://github.com/noisyloop/ClownPunk/actions/workflows/build.yml)
+
+## Run it from source
 
 ```
 cargo run --release
