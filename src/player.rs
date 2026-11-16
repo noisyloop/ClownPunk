@@ -14,8 +14,7 @@ use crate::platform::{rand_range, Input};
 pub const RADIUS: f32 = 0.5;
 pub const EYE_HEIGHT: f32 = 1.55;
 pub const MAX_HEALTH: i32 = 3;
-const TOP_SPEED: f32 = 11.0;
-const CARRY_SPEED: f32 = 5.5;
+const TOP_SPEED: f32 = 7.0;
 const LOOK_SENS: f32 = 0.0025;
 
 pub struct Player {
@@ -95,7 +94,7 @@ impl Player {
         )
     }
 
-    pub fn update_skate(&mut self, input: &Input, dt: f32, carrying: bool, obstacles: &[Obb]) {
+    pub fn update_skate(&mut self, input: &Input, dt: f32, obstacles: &[Obb]) {
         self.sway_t += dt;
         self.hurt_timer = (self.hurt_timer - dt).max(0.0);
         self.damage_flash = (self.damage_flash - dt).max(0.0);
@@ -104,12 +103,12 @@ impl Player {
         self.muzzle = (self.muzzle - dt).max(0.0);
 
         let grounded = self.hop <= 0.001 && self.hop_vel <= 0.0;
-        let max_speed = if carrying { CARRY_SPEED } else { TOP_SPEED };
-        let accel = if carrying { 5.0 } else { 9.0 };
+        let max_speed = TOP_SPEED;
+        let accel = 7.0;
 
         // 1) Steering: A/D rotate the heading (mouse already did in `look`).
         let steer = (input.right as i32 - input.left as i32) as f32;
-        let turn_rate = 2.1 * (0.5 + 0.5 * (self.speed() / 6.0).min(1.0));
+        let turn_rate = 2.1 * (0.5 + 0.5 * (self.speed() / 4.0).min(1.0));
         self.yaw += steer * turn_rate * dt;
 
         // 2) Split velocity into forward / sideways parts of the (new) heading.

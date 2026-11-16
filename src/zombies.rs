@@ -1,23 +1,17 @@
-//! Green zombies: chase AI, stun/getting-up cycle and bullet hit volumes.
+//! Green zombies: chase AI, dying, and bullet hit volumes.
 //!
 //! State machine per zombie:
-//!   Walking --(shot / hit by car)--> Stunned --(6 s)--> Walking
-//!   Stunned --(player picks up)--> Carried --(loaded)--> InTrunk
+//!   Walking --(shot / hit by car)--> Dead   (stays down for good)
 use crate::collision::{ray_sphere, resolve_circle, Obb};
 use crate::math::{Color, Vec2, Vec3};
 use crate::platform::rand_range;
 
 pub const RADIUS: f32 = 0.5;
-pub const STUN_TIME: f32 = 6.0;
-/// During the last bit of the stun the zombie visibly gets back up.
-pub const RISE_TIME: f32 = 0.7;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ZState {
     Walking,
-    Stunned,
-    Carried,
-    InTrunk,
+    Dead,
 }
 
 pub struct Zombie {
@@ -25,7 +19,8 @@ pub struct Zombie {
     pub vel: Vec2,
     pub yaw: f32,
     pub state: ZState,
-    pub stun: f32,
+    /// Seconds since death (drives the fall-over animation).
+    pub dead_t: f32,
     /// After hitting the player a zombie reels back for a moment.
     pub recoil: f32,
     pub speed: f32,
@@ -51,9 +46,9 @@ impl Zombie {
             vel: Vec2::ZERO,
             yaw: rand_range(0.0, 6.28),
             state: ZState::Walking,
-            stun: 0.0,
+            dead_t: 0.0,
             recoil: 0.0,
-            speed: rand_range(2.7, 3.5), // player tops out at 11, so you can outskate them
+            speed: rand_range(2.4, 3.1), // the skater tops out at 7, so you can outskate them
             aggro,
             phase: rand_range(0.0, 6.28),
             wander_dir: rand_range(0.0, 6.28),
@@ -62,22 +57,18 @@ impl Zombie {
         }
     }
 
-    /// 0 = standing, 1 = lying flat. Falls fast, rises slowly at the end of the stun.
+    /// 0 = standing, 1 = lying flat. Falls over quickly when killed.
     pub fn tilt(&self) -> f32 {
         match self.state {
-            ZState::Stunned => {
-                let fall = ((STUN_TIME - self.stun) * 6.0).min(1.0);
-                let rise = (self.stun / RISE_TIME).min(1.0);
-                fall.min(rise)
-            }
-            _ => 0.0,
+            ZState::Dead => (self.dead_t * 6.0).min(1.0),
+            ZState::Walking => 0.0,
         }
     }
 
-    /// Knock flat. `push` is the direction (and rough strength) it slides.
-    pub fn stun(&mut self, push: Vec2) {
-        self.state = ZState::Stunned;
-        self.stun = STUN_TIME;
+    /// Kill it. `push` is the direction (and rough strength) it slides.
+    pub fn kill(&mut self, push: Vec2) {
+        self.state = ZState::Dead;
+        self.dead_t = 0.0;
         self.vel = push;
         // Face the attacker so the zombie falls over backwards, away from them.
         if push.len_sq() > 1e-4 {
@@ -85,25 +76,16 @@ impl Zombie {
         }
     }
 
-    pub fn can_be_picked_up(&self) -> bool {
-        self.state == ZState::Stunned && self.stun > RISE_TIME + 0.2
-    }
-
     pub fn update(&mut self, dt: f32, target: Vec2, obstacles: &[Obb]) {
         match self.state {
             ZState::Walking => self.update_walking(dt, target, obstacles),
-            ZState::Stunned => {
-                self.stun -= dt;
+            ZState::Dead => {
+                self.dead_t += dt;
                 // Slide to a stop, still colliding with walls.
                 self.vel = self.vel * (1.0 - (6.0 * dt).min(1.0));
                 self.pos += self.vel * dt;
                 resolve_circle(&mut self.pos, RADIUS, obstacles);
-                if self.stun <= 0.0 {
-                    self.state = ZState::Walking;
-                    self.stun = 0.0;
-                }
             }
-            ZState::Carried | ZState::InTrunk => {}
         }
     }
 
