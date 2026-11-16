@@ -6,6 +6,7 @@
 //! deterministic and independent of frame rate.
 mod car;
 mod collision;
+mod icon;
 mod math;
 mod platform;
 mod player;
