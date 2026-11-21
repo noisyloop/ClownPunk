@@ -48,20 +48,15 @@ GL drawing, audio, random numbers).
 
 ## Download (no install, no Rust needed)
 
-Pick your system, unpack, and run `clownpunk`:
+Linux only. Unpack and run `clownpunk`:
 
 | System | Download |
 |--------|----------|
-| Windows (64-bit) | [clownpunk-windows-x64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clownpunk-windows-x64.zip) |
-| macOS (Apple Silicon) | [clownpunk-macos-arm64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clownpunk-macos-arm64.zip) |
 | Linux (64-bit) | [clownpunk-linux-x64.zip](https://github.com/noisyloop/ClownPunk/releases/latest/download/clownpunk-linux-x64.zip) |
 
 All releases: <https://github.com/noisyloop/ClownPunk/releases> (each release also lists SHA256 checksums in `SHA256SUMS.txt`).
 
-Notes: the builds are unsigned. Windows SmartScreen may say "unknown publisher"
-(More info > Run anyway). On macOS run
-`xattr -d com.apple.quarantine clownpunk` once, then
-`./clownpunk`. On Linux, `chmod +x` it if needed.
+Note: the build is unsigned. `chmod +x clownpunk` if needed.
 
 [![Build](https://github.com/noisyloop/ClownPunk/actions/workflows/build.yml/badge.svg)](https://github.com/noisyloop/ClownPunk/actions/workflows/build.yml)
 
@@ -72,7 +67,7 @@ cargo run --release
 ```
 
 Linux needs the usual X11/OpenGL runtime libraries (`libx11`, `libxi`, `libgl`);
-macOS and Windows work out of the box. Music needs ALSA: `libasound2` to run and
+Music needs ALSA: `libasound2` to run and
 `libasound2-dev` to build (`sudo apt install libasound2-dev` on Debian/Ubuntu).
 With no sound device the game simply runs silent. Set `CLOWNPUNK_NO_MUSIC=1` to
 turn the music off.
