@@ -12,11 +12,13 @@
 //!
 //! Each fixed tick (`Game::update`) does, in order:
 //!   input/controls -> player or car movement -> shooting & interactions ->
+//!   clown laser -> your crew (follow / ride / shoot) ->
 //!   zombie AI -> zombie/player/car contact -> win/lose checks.
+use crate::allies::{self, Ally};
 use crate::car::{self, Car};
 use crate::collision::Obb;
-use crate::math::{angle_diff, Color, Vec2, Vec3};
-use crate::platform::{rand_range, Input};
+use crate::math::{angle_diff, approach, Color, Vec2, Vec3};
+use crate::platform::{rand_chance, rand_range, Input};
 use crate::player::{self, Player};
 use crate::world::{self, World};
 use crate::zombies::{self, ZState, Zombie};
@@ -35,7 +37,19 @@ pub struct Tracer {
     pub from: Vec3,
     pub to: Vec3,
     pub ttl: f32,
+    /// Fired by a crew clown (drawn in a different colour).
+    pub ally: bool,
 }
+
+/// One beam of the clown laser burst, from the clown to a zombie.
+pub struct Laser {
+    pub from: Vec3,
+    pub to: Vec3,
+}
+
+/// How far the clown lasers reach, and how long the burst effect lasts.
+pub const LASER_RANGE: f32 = 24.0;
+pub const LASER_TTL: f32 = 0.6;
 
 /// Floating comic-book text ("BONK!") anchored in the world.
 pub struct Popup {
@@ -65,12 +79,20 @@ pub const FOV_FOOT: f32 = 72.0;
 const STRIP_AGGRO: f32 = 32.0;
 /// Zombies farther than this from you aren't simulated (they just wait).
 const ACTIVE_RANGE: f32 = 120.0;
+/// Clown power: fills by itself and with kills; spending it fires the lasers.
+const LASER_REGEN: f32 = 1.0 / 14.0;
+const LASER_PER_KILL: f32 = 0.08;
+/// This many zombies within `SURROUND_RADIUS` counts as "surrounded".
+const SURROUND_COUNT: usize = 3;
+const SURROUND_RADIUS: f32 = 10.0;
 
 pub struct Game {
     pub mode: Mode,
     pub world: World,
     pub player: Player,
     pub zombies: Vec<Zombie>,
+    /// Your crew: clowns that follow, ride along and shoot (or still wait to join).
+    pub allies: Vec<Ally>,
     pub cars: Vec<Car>,
     pub drive: Option<usize>,
     /// Zombies killed this run (shots and roadkill).
@@ -79,6 +101,14 @@ pub struct Game {
     pub final_time: f32,
     pub anim_time: f32,
     pub tracers: Vec<Tracer>,
+    pub lasers: Vec<Laser>,
+    /// Clown power 0..1 (1 = lasers ready) and the burst effect timer/origin.
+    pub laser_charge: f32,
+    pub laser_burst: f32,
+    pub laser_origin: Vec3,
+    pub laser_flash: f32,
+    /// Three or more zombies are close around you right now.
+    pub surrounded: bool,
     pub popups: Vec<Popup>,
     pub toast: Option<(String, f32)>,
     /// Interaction hint shown at the bottom of the screen ("E: Pick up").
@@ -99,6 +129,7 @@ impl Game {
             world,
             player: Player::new(PLAYER_START),
             zombies: Vec::new(),
+            allies: Vec::new(),
             cars: Vec::new(),
             drive: None,
             kills: 0,
@@ -106,6 +137,12 @@ impl Game {
             final_time: 0.0,
             anim_time: 0.0,
             tracers: Vec::new(),
+            lasers: Vec::new(),
+            laser_charge: 0.6,
+            laser_burst: 0.0,
+            laser_origin: Vec3::ZERO,
+            laser_flash: 0.0,
+            surrounded: false,
             popups: Vec::new(),
             toast: None,
             prompt: None,
@@ -116,6 +153,7 @@ impl Game {
         };
         g.spawn_cars();
         g.spawn_zombies();
+        g.spawn_allies();
         g
     }
 
@@ -176,8 +214,9 @@ impl Game {
         while x < world::FINISH_X - 40.0 {
             let group = 1 + (rand_range(0.0, 3.0) as usize); // 1..=3
             for _ in 0..group {
-                let pos = Vec2::new(x + rand_range(-6.0, 6.0), rand_range(-11.0, 11.0));
-                let blocked = self.world.statics.iter().any(|o| o.push_out(pos, 1.2).is_some());
+                let gx = x + rand_range(-6.0, 6.0);
+                let pos = world::road_point(gx, rand_range(-11.0, 11.0));
+                let blocked = world::in_clear_zone(gx) || self.world.statics.iter().any(|o| o.push_out(pos, 1.2).is_some());
                 if !blocked {
                     self.zombies.push(Zombie::new(pos, STRIP_AGGRO));
                 }
@@ -186,10 +225,27 @@ impl Game {
         }
     }
 
+    /// Two clowns start with you; more wave from the road all along the Strip
+    /// (drive or skate close to recruit them).
+    fn spawn_allies(&mut self) {
+        for dz in [-2.5f32, 2.5] {
+            self.allies.push(Ally::new(PLAYER_START + Vec2::new(-2.5, dz), true));
+        }
+        for x in [170.0f32, 280.0, 470.0, 570.0, 770.0, 880.0, 1070.0, 1170.0, 1370.0, 1450.0] {
+            let side = if rand_chance(0.5) { 1.0 } else { -1.0 };
+            let pos = world::road_point(x, side * rand_range(6.0, 10.0));
+            self.allies.push(Ally::new(pos, false));
+        }
+    }
+
+    pub fn crew_size(&self) -> usize {
+        self.allies.iter().filter(|a| a.recruited).count()
+    }
+
     fn start_run(&mut self) {
         self.mode = Mode::Playing;
         self.run_time = 0.0;
-        self.say("Shoot zombies, then hop in any car and floor it!", 5.0);
+        self.say("Shoot zombies, then hop in any car, hit the ramps and floor it! (Shift = turbo)", 6.0);
     }
 
     // ----------------------------------------------------------- helpers ---
@@ -252,6 +308,12 @@ impl Game {
         }
         self.run_time += dt;
         self.shake = (self.shake - dt * 3.0).max(0.0);
+        self.laser_flash = (self.laser_flash - dt).max(0.0);
+        self.laser_burst = (self.laser_burst - dt).max(0.0);
+        if self.laser_burst <= 0.0 {
+            self.lasers.clear();
+        }
+        self.laser_charge = (self.laser_charge + LASER_REGEN * dt).min(1.0);
         if let Some((_, t)) = &mut self.toast {
             *t -= dt;
         }
@@ -276,6 +338,8 @@ impl Game {
             }
         }
 
+        self.update_laser(input);
+        self.update_allies(dt);
         self.update_zombies(dt);
 
         if self.player.health <= 0 {
@@ -289,6 +353,9 @@ impl Game {
         let obstacles = self.obstacles(None);
         self.player.look(input);
         self.player.update_skate(input, dt, &obstacles);
+        // Ride up ramps (the board follows the surface; no launching on foot).
+        let gh = self.world.ground_height(self.player.pos);
+        self.player.ground_y = approach(self.player.ground_y, gh, 10.0 * dt);
 
         if input.shoot && self.player.shoot_cd <= 0.0 {
             self.fire(&obstacles);
@@ -328,13 +395,14 @@ impl Game {
 
         let right = Vec2::from_yaw(self.player.yaw).right_of();
         let muzzle = origin + Vec3::from_xz(right * 0.22, -0.18) + dir * 0.6;
-        self.tracers.push(Tracer { from: muzzle, to: origin + dir * best, ttl: 0.12 });
+        self.tracers.push(Tracer { from: muzzle, to: origin + dir * best, ttl: 0.12, ally: false });
 
         if let Some(i) = hit {
             let away = Vec2::new(dir.x, dir.z).norm();
             let pos = self.zombies[i].pos;
             self.zombies[i].kill(away * 7.0);
             self.kills += 1;
+            self.laser_charge = (self.laser_charge + LASER_PER_KILL).min(1.0);
             let texts = ["BONK!", "BOING!", "POW!", "WHAM!"];
             let text = texts[(rand_range(0.0, 4.0) as usize) % 4];
             self.popups.push(Popup { pos: Vec3::from_xz(pos, 2.2), text, ttl: 0.9 });
@@ -369,7 +437,7 @@ impl Game {
         self.cab_pitch = self.player.pitch.clamp(-0.5, 0.5);
         self.player.vel = Vec2::ZERO;
         self.player.hop = 0.0;
-        self.say("Floor it! Run the zombies over and drive to the finish arch. F to bail out.", 5.0);
+        self.say("Floor it! Shift = turbo, ramps = air, your crew rides along. F to bail out.", 6.0);
     }
 
     fn update_driving(&mut self, ci: usize, input: &Input, dt: f32) {
@@ -380,14 +448,30 @@ impl Game {
         self.player.damage_flash = (self.player.damage_flash - dt).max(0.0);
 
         let others = self.obstacles(Some(ci));
-        let impact = self.cars[ci].update_driven(input, dt, &others);
-        if impact > 4.0 {
-            self.shake = self.shake.max((impact / 20.0).min(1.0));
+        let ev = self.cars[ci].update_driven(input, dt, &others, &self.world);
+        if ev.impact > 4.0 {
+            self.shake = self.shake.max((ev.impact / 20.0).min(1.0));
+        }
+        if self.cars[ci].turbo_on {
+            self.shake = self.shake.max(0.22);
+        }
+        let above = Vec3::from_xz(self.cars[ci].pos, self.cars[ci].y + 3.0);
+        if ev.launched {
+            self.popups.push(Popup { pos: above, text: "AIRBORNE!", ttl: 0.9 });
+        }
+        if let Some(t) = ev.landed_after {
+            if t > 0.4 {
+                let text = if t > 1.2 { "HUGE AIR!" } else { "NICE LANDING!" };
+                self.popups.push(Popup { pos: above, text, ttl: 0.9 });
+                self.shake = self.shake.max(0.35);
+                // Big jumps charge the clown power.
+                self.laser_charge = (self.laser_charge + 0.15 * t.min(2.0)).min(1.0);
+            }
         }
         self.player.pos = self.cars[ci].pos;
         self.player.vel = Vec2::ZERO;
 
-        if input.exit_car {
+        if input.exit_car && !self.cars[ci].airborne {
             self.exit_car(ci);
             return;
         }
@@ -411,13 +495,178 @@ impl Game {
         self.say("Out of the car. Shoot them! E next to a car to get back in.", 3.0);
     }
 
+    // ----------------------------------------------------- clown laser ---
+
+    /// Where the lasers shoot from: the clown's chest, or the middle of the car.
+    fn laser_source(&self) -> Vec3 {
+        match self.drive {
+            Some(ci) => Vec3::from_xz(self.cars[ci].pos, self.cars[ci].y + 1.5),
+            None => {
+                let e = self.player.eye();
+                Vec3::new(e.x, e.y - 0.2, e.z)
+            }
+        }
+    }
+
+    /// SUPER POWER: when charged, the clown's eyes fire a ring of lasers that
+    /// vaporise every zombie within `LASER_RANGE` at once (even through a
+    /// crowd that's closing in). Works on foot or in a car.
+    fn update_laser(&mut self, input: &Input) {
+        let origin = self.laser_source();
+        let centre = origin.xz();
+        let near = self.zombies.iter().filter(|z| z.state == ZState::Walking && z.pos.dist(centre) < SURROUND_RADIUS).count();
+        self.surrounded = near >= SURROUND_COUNT;
+
+        if !input.laser {
+            return;
+        }
+        if self.laser_charge < 1.0 {
+            self.say("Clown power is still charging...", 1.5);
+            return;
+        }
+        let hits: Vec<usize> = (0..self.zombies.len())
+            .filter(|&i| self.zombies[i].state == ZState::Walking && self.zombies[i].pos.dist(centre) <= LASER_RANGE)
+            .collect();
+        if hits.is_empty() {
+            self.say("No zombies in range. Save the lasers!", 1.5);
+            return;
+        }
+        self.lasers.clear();
+        for (n, &i) in hits.iter().enumerate() {
+            let zp = self.zombies[i].pos;
+            let away = (zp - centre).norm();
+            self.zombies[i].kill(away * 9.0);
+            self.kills += 1;
+            self.lasers.push(Laser { from: origin, to: Vec3::from_xz(zp, 1.2) });
+            if n < 6 {
+                self.popups.push(Popup { pos: Vec3::from_xz(zp, 2.3), text: "ZAP!", ttl: 0.9 });
+            }
+        }
+        self.laser_charge = 0.0;
+        self.laser_burst = LASER_TTL;
+        self.laser_origin = origin;
+        self.laser_flash = 0.35;
+        self.shake = self.shake.max(0.7);
+        let plural = if hits.len() == 1 { "zombie" } else { "zombies" };
+        self.say(&format!("CLOWN LASERS! {} {} vaporised", hits.len(), plural), 2.5);
+    }
+
+    // ------------------------------------------------------------ crew ---
+
+    /// Recruit waiting clowns you pass, then move the crew: on foot they hover
+    /// around you, in a car they climb aboard. Everyone shoots the nearest
+    /// zombie in sight every second or so.
+    fn update_allies(&mut self, dt: f32) {
+        let leader = match self.drive {
+            Some(ci) => self.cars[ci].pos,
+            None => self.player.pos,
+        };
+        // Recruit.
+        let mut crew = self.crew_size();
+        for i in 0..self.allies.len() {
+            if self.allies[i].recruited {
+                continue;
+            }
+            if crew < allies::MAX_CREW && self.allies[i].pos.dist(leader) < allies::RECRUIT_RANGE {
+                self.allies[i].recruited = true;
+                crew += 1;
+                self.say(&format!("A clown joined your crew! ({}/{})", crew, allies::MAX_CREW), 2.5);
+            } else {
+                self.allies[i].wave(dt);
+            }
+        }
+
+        // Move.
+        let obstacles = self.obstacles(None);
+        let n = crew.max(1);
+        let mut k = 0;
+        for i in 0..self.allies.len() {
+            if !self.allies[i].recruited {
+                continue;
+            }
+            match self.drive {
+                Some(ci) => {
+                    let c = &self.cars[ci];
+                    let (along, right, up) = allies::SEATS[k % allies::SEATS.len()];
+                    let a = &mut self.allies[i];
+                    a.seat = Some(k);
+                    a.pos = c.pos + c.forward() * along + c.right() * right;
+                    a.y = c.y + up + along * c.pitch.sin();
+                    a.vel = Vec2::ZERO;
+                    if a.aim_t <= 0.0 {
+                        a.yaw = c.yaw;
+                    }
+                    a.shoot_cd -= dt;
+                    a.aim_t = (a.aim_t - dt).max(0.0);
+                    a.phase += dt * 5.0;
+                }
+                None => {
+                    let ang = k as f32 * std::f32::consts::TAU / n as f32 + self.anim_time * 0.25;
+                    let radius = 3.4 + (k % 2) as f32 * 1.6;
+                    let spot = leader + Vec2::from_yaw(ang) * radius;
+                    let a = &mut self.allies[i];
+                    a.seat = None;
+                    a.follow(dt, spot, leader, &obstacles);
+                    a.y = a.y.max(self.world.ground_height(a.pos));
+                }
+            }
+            k += 1;
+        }
+
+        // Shoot.
+        for i in 0..self.allies.len() {
+            if !self.allies[i].recruited || self.allies[i].shoot_cd > 0.0 {
+                continue;
+            }
+            let (apos, ay) = (self.allies[i].pos, self.allies[i].y);
+            let from = Vec3::from_xz(apos, ay + 1.4);
+            let mut best: Option<(usize, f32)> = None;
+            for (zi, z) in self.zombies.iter().enumerate() {
+                if z.state != ZState::Walking || (z.pos.x - apos.x).abs() > allies::AIM_RANGE {
+                    continue;
+                }
+                let d = z.pos.dist(apos);
+                if d < allies::AIM_RANGE && best.map_or(true, |(_, bd)| d < bd) {
+                    best = Some((zi, d));
+                }
+            }
+            let Some((zi, d)) = best else {
+                self.allies[i].shoot_cd = 0.25; // nothing to shoot: look again soon
+                continue;
+            };
+            let to = Vec3::from_xz(self.zombies[zi].pos, 1.0);
+            let dir = (to - from).norm();
+            let blocked = self.world.statics.iter().any(|o| o.ray(from, dir, d).map_or(false, |t| t < d - 0.8));
+            let a = &mut self.allies[i];
+            a.shoot_cd = rand_range(0.8, 1.5);
+            if blocked {
+                continue;
+            }
+            a.aim_t = 0.3;
+            a.yaw = (to.z - from.z).atan2(to.x - from.x);
+            let hit = rand_chance(0.8);
+            let end = if hit { to } else { to + Vec3::new(rand_range(-1.5, 1.5), 0.0, rand_range(-1.5, 1.5)) };
+            self.tracers.push(Tracer { from, to: end, ttl: 0.12, ally: true });
+            if hit {
+                let away = Vec2::new(dir.x, dir.z).norm();
+                let zp = self.zombies[zi].pos;
+                self.zombies[zi].kill(away * 6.0);
+                self.kills += 1;
+                self.laser_charge = (self.laser_charge + LASER_PER_KILL).min(1.0);
+                if rand_chance(0.5) {
+                    self.popups.push(Popup { pos: Vec3::from_xz(zp, 2.2), text: "HONK!", ttl: 0.9 });
+                }
+            }
+        }
+    }
+
     // --------------------------------------------------------- zombies ---
 
     /// Moving cars kill walking zombies and lose speed doing it. Runs BEFORE
     /// zombie collision so a fast car hits zombies instead of bulldozing them.
     fn car_hits_zombies(&mut self) {
         for ci in 0..self.cars.len() {
-            if self.cars[ci].speed.abs() < ROADKILL_SPEED {
+            if self.cars[ci].speed.abs() < ROADKILL_SPEED || self.cars[ci].y > 1.0 {
                 continue;
             }
             let circles = self.cars[ci].circles();
@@ -434,6 +683,7 @@ impl Game {
                     let pos = z.pos;
                     self.zombies[zi].kill(push);
                     self.kills += 1;
+                    self.laser_charge = (self.laser_charge + LASER_PER_KILL).min(1.0);
                     self.cars[ci].speed *= 0.72;
                     self.popups.push(Popup { pos: Vec3::from_xz(pos, 2.2), text: "SPLAT!", ttl: 0.9 });
                     if Some(ci) == self.drive {
@@ -527,12 +777,14 @@ impl Game {
                 Some(ci) => {
                     let c = &self.cars[ci];
                     let seat = c.pos - c.forward() * 0.35 - c.right() * 0.45;
-                    let mut pos = Vec3::from_xz(seat, 1.38);
+                    let mut pos = Vec3::from_xz(seat, 1.38 + c.y);
                     let s = self.shake * 0.12;
                     pos.x += (self.anim_time * 61.0).sin() * s;
                     pos.y += (self.anim_time * 73.0).cos() * s;
-                    let speed_t = (c.speed.abs() / car::MAX_SPEED).min(1.0);
-                    CamView { pos, yaw: c.yaw + self.cab_yaw, pitch: self.cab_pitch, roll: -c.steer * 0.02 * speed_t, fov: 70.0 + 20.0 * speed_t }
+                    let speed_t = (c.speed.abs() / car::TURBO_SPEED).min(1.0);
+                    // The cab tips with the car (nose up on a ramp), less so when looking sideways.
+                    let tip = c.pitch * self.cab_yaw.cos();
+                    CamView { pos, yaw: c.yaw + self.cab_yaw, pitch: self.cab_pitch + tip, roll: -c.steer * 0.02 * speed_t, fov: 70.0 + 28.0 * speed_t }
                 }
             },
         }
@@ -556,6 +808,7 @@ mod tests {
         g.world.statics.clear();
         g.cars.clear();
         g.zombies.clear();
+        g.allies.clear();
         g.player = Player::new(Vec2::new(0.0, 0.0));
         g
     }
@@ -612,7 +865,7 @@ mod tests {
             assert!(strip >= 40, "strip zombies: {strip}");
             // Spread along the whole road, not bunched at the start.
             let far = g.zombies.iter().filter(|z| z.pos.x > world::FINISH_X - 300.0).count();
-            assert!(far >= 5, "zombies near the finish: {far}");
+            assert!(far >= 3, "zombies near the finish: {far}");
         }
     }
 
@@ -748,5 +1001,277 @@ mod tests {
         assert_eq!(g.run_time, t);
         tick(&mut g, &Input { pause: true, ..Default::default() });
         assert_eq!(g.mode, Mode::Playing);
+    }
+
+    // ---------------------------------------------------------------- new ---
+
+    /// Autopilot: steer toward a point 14 m ahead on the road's centre line.
+    fn autopilot(car: &Car, turbo: bool) -> Input {
+        let ahead = world::road_point(car.pos.x + 14.0, 0.0);
+        let want = (ahead.y - car.pos.y).atan2(ahead.x - car.pos.x);
+        let d = angle_diff(want, car.yaw);
+        Input { forward: true, turbo, right: d > 0.04, left: d < -0.04, ..Default::default() }
+    }
+
+    #[test]
+    fn the_road_curves_but_never_too_sharply() {
+        let mut max_z = 0.0f32;
+        let mut max_slope = 0.0f32;
+        let mut x = world::STRIP_START;
+        while x < world::FINISH_X {
+            max_z = max_z.max(world::road_z(x).abs());
+            max_slope = max_slope.max(world::road_yaw(x).abs());
+            x += 0.5;
+        }
+        assert!(max_z > 15.0, "the road should visibly swing, max offset {max_z}");
+        assert!(max_slope < 0.6, "bends must stay drivable, max heading {max_slope}");
+        // The lot exit, the finish and every ramp run are dead straight.
+        assert_eq!(world::road_z(world::STRIP_START + 10.0), 0.0);
+        assert_eq!(world::road_z(world::FINISH_X), 0.0);
+        for r in &g_ramps() {
+            assert_eq!(world::road_z(r.x0), 0.0);
+            assert_eq!(world::road_z(r.x0 + 70.0), 0.0);
+        }
+    }
+
+    fn g_ramps() -> Vec<world::Ramp> {
+        Game::new().world.ramps.clone()
+    }
+
+    #[test]
+    fn turbo_beats_normal_top_speed_and_drains_the_tank() {
+        let mut g = arena();
+        g.cars.push(Car::new(Vec2::new(0.0, 0.0), 0.0, Color::rgb(1.0, 0.0, 0.0)));
+        g.drive = Some(0);
+        for _ in 0..240 {
+            tick(&mut g, &Input { forward: true, ..Default::default() });
+            g.cars[0].pos = Vec2::new(0.0, 0.0);
+        }
+        let normal = g.cars[0].speed;
+        assert!(normal <= car::MAX_SPEED + 0.01, "normal {normal}");
+        let mut top = 0.0f32;
+        for _ in 0..120 {
+            tick(&mut g, &Input { forward: true, turbo: true, ..Default::default() });
+            g.cars[0].pos = Vec2::new(0.0, 0.0);
+            top = top.max(g.cars[0].speed);
+        }
+        assert!(top > car::MAX_SPEED + 6.0, "turbo top speed {top}");
+        assert!(g.cars[0].turbo < 0.75, "tank should drain, {}", g.cars[0].turbo);
+        // Let off: speed bleeds back to normal and the tank refills.
+        for _ in 0..600 {
+            tick(&mut g, &Input { forward: true, ..Default::default() });
+            g.cars[0].pos = Vec2::new(0.0, 0.0);
+        }
+        assert!(g.cars[0].speed <= car::MAX_SPEED + 0.01);
+        assert!(g.cars[0].turbo > 0.9);
+    }
+
+    #[test]
+    fn ramps_launch_the_car_and_it_always_lands_on_the_road() {
+        // Slow, normal and full-turbo approaches, with the car arriving a bit crooked.
+        for (turbo, yaw_off, z_off) in [(false, 0.0, 0.0), (true, 0.0, 0.0), (true, 0.12, 2.0), (false, -0.1, -2.5), (true, -0.12, 3.0)] {
+            for ri in 0..5 {
+                let mut g = arena();
+                let r = g.world.ramps[ri];
+                g.cars.push(Car::new(Vec2::new(r.x0 - 30.0, z_off), yaw_off, Color::rgb(1.0, 0.0, 0.0)));
+                g.drive = Some(0);
+                g.cars[0].speed = if turbo { 22.0 } else { 14.0 };
+                let (mut flew, mut max_y) = (false, 0.0f32);
+                for _ in 0..600 {
+                    tick(&mut g, &Input { forward: true, turbo, ..Default::default() });
+                    flew |= g.cars[0].airborne;
+                    max_y = max_y.max(g.cars[0].y);
+                    if flew && !g.cars[0].airborne {
+                        break;
+                    }
+                }
+                let c = &g.cars[0];
+                assert!(flew, "ramp {ri} turbo={turbo}: never took off (x={}, y={})", c.pos.x, c.y);
+                assert!(max_y > 1.5, "should get real height, got {max_y}");
+                assert!(!c.airborne && c.y == 0.0, "should have landed");
+                if yaw_off == 0.0 {
+                    assert!(c.pos.x > r.x0 + r.len, "landed past the ramp, x={}", c.pos.x);
+                }
+                assert!(c.pos.x < r.x0 + r.len + 64.0, "landed inside the clear landing zone, x={}", c.pos.x);
+                assert!(c.pos.y.abs() < world::ROAD_HALF, "landed on the road, z={}", c.pos.y);
+                assert!(angle_diff(c.yaw, 0.0).abs() < 0.2, "landing assist straightens the car, yaw={}", c.yaw);
+                assert!(c.speed > 8.0, "keeps going after landing, speed={}", c.speed);
+            }
+        }
+    }
+
+    #[test]
+    fn cars_fly_over_low_obstacles_but_not_walls() {
+        let mut g = arena();
+        g.world.statics.push(Obb::aabb(30.0, 0.0, 1.0, 5.0, 1.0)); // a low barrier line
+        g.cars.push(Car::new(Vec2::new(20.0, 0.0), 0.0, Color::rgb(1.0, 0.0, 0.0)));
+        g.drive = Some(0);
+        g.cars[0].speed = 15.0;
+        g.cars[0].y = 3.0;
+        g.cars[0].airborne = true;
+        g.cars[0].vy = 6.0;
+        for _ in 0..54 {
+            tick(&mut g, &Input::default());
+        }
+        assert!(g.cars[0].pos.x > 33.0, "flew over the low barrier, x={}", g.cars[0].pos.x);
+    }
+
+    #[test]
+    fn autopilot_can_drive_the_whole_winding_strip_with_ramps() {
+        for turbo in [false, true] {
+            let mut g = arena();
+            g.world.statics.clear();
+            g.cars.push(Car::new(Vec2::new(world::STRIP_START + 5.0, 0.0), 0.0, Color::rgb(1.0, 0.0, 0.0)));
+            g.drive = Some(0);
+            let mut max_off = 0.0f32;
+            let mut flights = 0;
+            let mut was_air = false;
+            for _ in 0..(60 * 150) {
+                let inp = autopilot(&g.cars[0], turbo && g.cars[0].turbo > 0.3);
+                tick(&mut g, &inp);
+                let c = &g.cars[0];
+                max_off = max_off.max((c.pos.y - world::road_z(c.pos.x)).abs());
+                if c.airborne && !was_air {
+                    flights += 1;
+                }
+                was_air = c.airborne;
+                if g.mode == Mode::Won {
+                    break;
+                }
+            }
+            assert_eq!(g.mode, Mode::Won, "turbo={turbo}: never reached the finish (x={})", g.cars[0].pos.x);
+            assert!(max_off < world::ROAD_HALF, "stayed on the road, max offset {max_off}");
+            assert_eq!(flights, 5, "one flight per ramp");
+        }
+    }
+
+    #[test]
+    fn clown_lasers_vaporise_the_surrounding_zombies() {
+        let mut g = arena();
+        g.laser_charge = 1.0;
+        for k in 0..8 {
+            let a = k as f32 * std::f32::consts::TAU / 8.0;
+            let mut z = Zombie::new(g.player.pos + Vec2::from_yaw(a) * 5.0, 500.0);
+            z.speed = 0.0;
+            g.zombies.push(z);
+        }
+        let mut far = Zombie::new(g.player.pos + Vec2::new(60.0, 0.0), 0.0);
+        far.speed = 0.0;
+        g.zombies.push(far);
+        tick(&mut g, &Input::default());
+        assert!(g.surrounded, "8 zombies at 5 m is surrounded");
+        tick(&mut g, &Input { laser: true, ..Default::default() });
+        let dead = g.zombies.iter().filter(|z| z.state == ZState::Dead).count();
+        assert_eq!(dead, 8, "everything in range dies");
+        assert_eq!(g.zombies[8].state, ZState::Walking, "out of range survives");
+        assert_eq!(g.kills, 8);
+        assert!(g.laser_charge < 0.1, "power is spent");
+        assert_eq!(g.lasers.len(), 8);
+        // Uncharged lasers do nothing.
+        let mut z = Zombie::new(g.player.pos + Vec2::new(3.0, 0.0), 0.0);
+        z.speed = 0.0;
+        g.zombies.push(z);
+        tick(&mut g, &Input { laser: true, ..Default::default() });
+        assert_eq!(g.zombies[9].state, ZState::Walking);
+    }
+
+    #[test]
+    fn lasers_also_work_from_the_car() {
+        let mut g = arena();
+        g.cars.push(Car::new(Vec2::new(0.0, 0.0), 0.0, Color::rgb(1.0, 0.0, 0.0)));
+        g.drive = Some(0);
+        g.laser_charge = 1.0;
+        let mut z = Zombie::new(Vec2::new(0.0, 9.0), 0.0);
+        z.speed = 0.0;
+        g.zombies.push(z);
+        tick(&mut g, &Input { laser: true, ..Default::default() });
+        assert_eq!(g.zombies[0].state, ZState::Dead);
+    }
+
+    #[test]
+    fn crew_follows_you_shoots_zombies_and_rides_in_the_car() {
+        let mut g = arena();
+        g.allies.push(Ally::new(Vec2::new(-3.0, 2.0), true));
+        g.allies.push(Ally::new(Vec2::new(-3.0, -2.0), true));
+        // They hover near you when you move.
+        g.player.pos = Vec2::new(30.0, 0.0);
+        for _ in 0..240 {
+            tick(&mut g, &Input::default());
+        }
+        for a in &g.allies {
+            assert!(a.pos.dist(g.player.pos) < 9.0, "ally follows, dist {}", a.pos.dist(g.player.pos));
+        }
+        // They shoot zombies for you.
+        for k in 0..6 {
+            let mut z = Zombie::new(g.player.pos + Vec2::new(10.0 + k as f32, (k as f32) - 3.0), 0.0);
+            z.speed = 0.0;
+            g.zombies.push(z);
+        }
+        for _ in 0..(60 * 12) {
+            tick(&mut g, &Input::default());
+        }
+        let dead = g.zombies.iter().filter(|z| z.state == ZState::Dead).count();
+        assert!(dead >= 4, "crew killed {dead} of 6");
+        assert!(g.kills as usize >= dead);
+        // They climb aboard when you drive, and hop off when you get out.
+        g.cars.push(Car::new(g.player.pos + Vec2::new(0.0, 3.0), 0.0, Color::rgb(1.0, 0.0, 0.0)));
+        press_interact(&mut g);
+        assert_eq!(g.drive, Some(0));
+        tick(&mut g, &Input::default());
+        for a in &g.allies {
+            assert!(a.seat.is_some());
+            assert!(a.pos.dist(g.cars[0].pos) < 3.0, "rider is on the car");
+        }
+        tick(&mut g, &Input { exit_car: true, ..Default::default() });
+        tick(&mut g, &Input::default());
+        assert!(g.allies.iter().all(|a| a.seat.is_none()));
+    }
+
+    #[test]
+    fn waiting_clowns_join_when_you_pass_and_the_crew_is_capped() {
+        let mut g = arena();
+        g.allies.push(Ally::new(Vec2::new(40.0, 0.0), false));
+        g.allies.push(Ally::new(Vec2::new(300.0, 0.0), false));
+        g.player.pos = Vec2::new(36.0, 0.0);
+        tick(&mut g, &Input::default());
+        assert!(g.allies[0].recruited, "near clown joins");
+        assert!(!g.allies[1].recruited, "far clown keeps waving");
+        assert_eq!(g.crew_size(), 1);
+        // Fill the crew; extra recruits are turned away.
+        g.allies.clear();
+        for _ in 0..allies::MAX_CREW {
+            g.allies.push(Ally::new(g.player.pos + Vec2::new(2.0, 0.0), true));
+        }
+        g.allies.push(Ally::new(g.player.pos + Vec2::new(4.0, 0.0), false));
+        tick(&mut g, &Input::default());
+        assert_eq!(g.crew_size(), allies::MAX_CREW);
+    }
+
+    #[test]
+    fn nothing_sits_in_a_ramp_landing_zone() {
+        for _ in 0..5 {
+            let g = Game::new();
+            for z in &g.zombies {
+                assert!(!(world::in_clear_zone(z.pos.x - 4.0) && world::in_clear_zone(z.pos.x + 4.0)) || z.pos.x < world::STRIP_START, "zombie in landing zone at {}", z.pos.x);
+            }
+            for r in &g.world.ramps {
+                let blockers = g.world.statics.iter().filter(|o| o.center.x > r.x0 - 14.0 && o.center.x < r.x0 + r.len + 64.0 && o.half.x < 5.0 && o.center.y.abs() < 12.0 && o.height > 0.6).count();
+                // The only boxes allowed near a ramp are its own two flanks (height 0.5, filtered out).
+                assert_eq!(blockers, 0, "obstacle near ramp at {}", r.x0);
+            }
+        }
+    }
+
+    #[test]
+    fn skater_turbo_is_faster_but_still_tame_without_it() {
+        let mut g = arena();
+        let hold = Input { forward: true, turbo: true, ..Default::default() };
+        let mut top = 0.0f32;
+        for _ in 0..120 {
+            tick(&mut g, &hold);
+            g.player.pos = Vec2::ZERO;
+            top = top.max(g.player.speed());
+        }
+        assert!(top > 8.5, "turbo skating {top}");
     }
 }

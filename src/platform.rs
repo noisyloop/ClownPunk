@@ -69,6 +69,8 @@ pub struct Input {
     pub interact: bool, // (edge) E
     pub exit_car: bool, // (edge) F
     pub shoot: bool,    // (edge) left mouse
+    pub turbo: bool,    // held: Shift
+    pub laser: bool,    // (edge) right mouse / G: clown laser burst
     pub confirm: bool,  // (edge) Enter / Space / click, for menus
     pub pause: bool,    // (edge) Esc
     pub restart: bool,  // (edge) R
@@ -88,6 +90,7 @@ impl Input {
         self.interact = false;
         self.exit_car = false;
         self.shoot = false;
+        self.laser = false;
         self.confirm = false;
         self.pause = false;
         self.restart = false;
@@ -149,6 +152,8 @@ pub fn poll_input() -> Input {
         interact: is_key_pressed(KeyCode::E),
         exit_car: is_key_pressed(KeyCode::F),
         shoot: click && captured,
+        turbo: is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift),
+        laser: captured && (is_mouse_button_pressed(MouseButton::Right) || is_key_pressed(KeyCode::G)),
         confirm: is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) || click,
         pause: is_key_pressed(KeyCode::Escape),
         restart: is_key_pressed(KeyCode::R),

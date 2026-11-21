@@ -5,11 +5,12 @@
 //!   1. 3D pass  : sky, ground, buildings, props, cars, zombies, effects,
 //!                 then the first-person "viewmodel" (hands/board/dashboard)
 //!   2. 2D pass  : HUD, floating labels, and the menu/overlay screens
+use crate::allies::Ally;
 use crate::car::{self, Car};
 use crate::math::{Color, Mat3, Vec2, Vec3};
 use crate::platform::{self as p, Mat};
 use crate::player::Player;
-use crate::state::{CamView, Game, Mode};
+use crate::state::{CamView, Game, Mode, LASER_RANGE, LASER_TTL};
 use crate::world::{self, neon, Building, Prop, PropKind, World};
 use crate::zombies::{ZState, Zombie};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -31,6 +32,7 @@ pub fn draw(game: &Game) {
 
     draw_sky(cam.pos);
     draw_ground(cam.pos.x);
+    draw_ramps(&game.world, cam.pos.x, t);
     draw_lot_walls(&game.world);
     draw_buildings(&game.world, cam.pos, t);
     draw_props(&game.world, cam.pos, t);
@@ -45,11 +47,22 @@ pub fn draw(game: &Game) {
             draw_zombie(z);
         }
     }
+    for a in &game.allies {
+        if (a.pos.x - cam.pos.x).abs() < 300.0 {
+            draw_ally(a, t);
+        }
+    }
     for tr in &game.tracers {
         let k = (tr.ttl / 0.12).clamp(0.0, 1.0);
-        beam(tr.from, tr.to, 0.035 * (0.4 + k), Color::rgb(1.0, 0.95, 0.5));
-        p::draw_aabb(tr.to, Vec3::new(0.25, 0.25, 0.25), Color::rgb(1.0, 0.6, 0.2), Mat::Glow);
+        let (beam_c, spark_c) = if tr.ally {
+            (Color::rgb(0.5, 1.0, 1.0), Color::rgb(0.3, 0.8, 1.0))
+        } else {
+            (Color::rgb(1.0, 0.95, 0.5), Color::rgb(1.0, 0.6, 0.2))
+        };
+        beam(tr.from, tr.to, 0.035 * (0.4 + k), beam_c);
+        p::draw_aabb(tr.to, Vec3::new(0.25, 0.25, 0.25), spark_c, Mat::Glow);
     }
+    draw_laser_burst(game);
     if game.mode != Mode::Title {
         match game.drive {
             None => draw_viewmodel_foot(game, &cam),
@@ -150,26 +163,90 @@ fn draw_ground(cam_x: f32) {
         p::draw_aabb(Vec3::new(-40.0 + k as f32 * 7.0, 0.01, 0.0), Vec3::new(3.0, 0.02, 0.2), Color::rgb(0.8, 0.8, 0.85), Mat::Lit);
     }
 
-    // --- The Strip: 24 m tiles, only those near the camera.
-    let tile = 24.0;
+    // --- The Strip: 8 m tiles laid along the (curving) centre line. Each tile
+    // is a rotated box, slightly longer than its pitch so bends leave no gaps.
+    let tile = 8.0;
+    let reach = 250.0;
     let end_x = world::FINISH_X + 40.0;
-    let first = (((cam_x - 340.0).max(world::STRIP_START)) / tile).floor() as i32;
-    let last = (((cam_x + 340.0).min(end_x)) / tile).ceil() as i32;
+    let first = (((cam_x - reach).max(world::STRIP_START - 12.0)) / tile).floor() as i32;
+    let last = (((cam_x + reach).min(end_x)) / tile).ceil() as i32;
     for k in first..last {
         let x0 = k as f32 * tile;
         let xm = x0 + tile * 0.5;
         if xm < world::STRIP_START - 12.0 {
             continue;
         }
-        p::draw_aabb(Vec3::new(xm, -0.05, 0.0), Vec3::new(tile, 0.1, 26.0), Color::rgb(0.11, 0.11, 0.15), Mat::Lit);
+        let yaw = world::road_yaw(xm);
+        let m = Mat3::from_yaw(yaw);
+        let c = world::road_point(xm, 0.0);
+        let fwd = Vec2::from_yaw(yaw);
+        let right = fwd.right_of();
+        // Point `a` along the road and `b` to the right of the centre line.
+        let at = |a: f32, y: f32, b: f32| {
+            let q = c + fwd * a + right * b;
+            Vec3::new(q.x, y, q.y)
+        };
+        let len = tile + 0.8;
+        p::draw_box(at(0.0, -0.05, 0.0), Vec3::new(len, 0.1, 26.0), &m, Color::rgb(0.11, 0.11, 0.15), Mat::Lit);
         for s in [-1.0f32, 1.0] {
-            p::draw_aabb(Vec3::new(xm, -0.03, s * 16.0), Vec3::new(tile, 0.14, 6.0), Color::rgb(0.30, 0.26, 0.38), Mat::Lit);
+            p::draw_box(at(0.0, -0.03, s * 16.0), Vec3::new(len, 0.14, 6.0), &m, Color::rgb(0.30, 0.26, 0.38), Mat::Lit);
             let edge = if s > 0.0 { neon(1) } else { neon(0) };
-            p::draw_aabb(Vec3::new(xm, 0.05, s * 13.0), Vec3::new(tile, 0.05, 0.3), edge, Mat::Glow);
-            p::draw_aabb(Vec3::new(xm, 0.01, s * 0.3), Vec3::new(tile, 0.02, 0.12), YELLOW, Mat::Lit);
-            for d in 0..3 {
-                p::draw_aabb(Vec3::new(x0 + 4.0 + d as f32 * 8.0, 0.01, s * 6.5), Vec3::new(4.0, 0.02, 0.2), WHITE, Mat::Lit);
+            p::draw_box(at(0.0, 0.05, s * 13.0), Vec3::new(len, 0.05, 0.3), &m, edge, Mat::Glow);
+            p::draw_box(at(0.0, 0.01, s * 0.3), Vec3::new(len, 0.02, 0.12), &m, YELLOW, Mat::Lit);
+            p::draw_box(at(0.0, 0.01, s * 6.5), Vec3::new(4.0, 0.02, 0.2), &m, WHITE, Mat::Lit);
+        }
+    }
+}
+
+// ================================================================ ramps ===
+
+/// Jump ramps: a glowing wedge with chevrons, two tall beacons so you can
+/// see it coming, and a mint-green LANDING ZONE of striped bars past the end.
+fn draw_ramps(w: &World, cam_x: f32, t: f32) {
+    for (i, r) in w.ramps.iter().enumerate() {
+        if (r.x0 - cam_x).abs() > 330.0 {
+            continue;
+        }
+        let ang = (r.h / r.len).atan();
+        let m = Mat3::rot_z(ang);
+        let slab_len = (r.len * r.len + r.h * r.h).sqrt();
+        let nrm = Vec3::new(-ang.sin(), ang.cos(), 0.0);
+        let mid = Vec3::new(r.x0 + r.len * 0.5, r.h * 0.5, 0.0);
+        let accent = neon(i + 3);
+        // Surface slab + glowing rails.
+        p::draw_box(mid - nrm * 0.2, Vec3::new(slab_len, 0.4, r.half_w * 2.0), &m, Color::rgb(0.22, 0.16, 0.34), Mat::Lit);
+        for s in [-1.0f32, 1.0] {
+            p::draw_box(mid + nrm * 0.1 + Vec3::new(0.0, 0.0, s * (r.half_w - 0.12)), Vec3::new(slab_len, 0.14, 0.26), &m, accent, Mat::Glow);
+        }
+        // Chevron bars marching up the slope.
+        for j in 0..5 {
+            let u = (j as f32 + 0.6) / 5.2;
+            let glow = pulse(t, 6.0, -(j as f32) * 0.9);
+            let pos = Vec3::new(r.x0 + r.len * u, r.h * u, 0.0) + nrm * 0.07;
+            p::draw_box(pos, Vec3::new(0.7, 0.06, r.half_w * 1.5), &m, YELLOW.scale(0.35 + 0.65 * glow), Mat::Glow);
+        }
+        // Solid fill under the slab (stepped, kept just inside the slab's width).
+        let n = 8;
+        for j in 0..n {
+            let top = r.h * j as f32 / n as f32;
+            if top > 0.1 {
+                let sx = r.x0 + r.len * (j as f32 + 0.5) / n as f32;
+                p::draw_aabb(Vec3::new(sx, top * 0.5, 0.0), Vec3::new(r.len / n as f32, top, r.half_w * 2.0 - 0.15), Color::rgb(0.14, 0.1, 0.22), Mat::Lit);
             }
+        }
+        // Tall beacons at the entrance.
+        for s in [-1.0f32, 1.0] {
+            let k = 0.55 + 0.45 * pulse(t, 3.0, s);
+            p::draw_aabb(Vec3::new(r.x0 - 2.0, 7.0, s * (r.half_w + 2.0)), Vec3::new(0.5, 14.0, 0.5), Color::rgb(1.0, 0.55, 0.1).scale(k), Mat::Glow);
+        }
+        // Landing zone: striped pad with edge lines.
+        let pad0 = r.x0 + r.len + 10.0;
+        for j in 0..9 {
+            let g = pulse(t, 4.0, j as f32 * -0.7);
+            p::draw_aabb(Vec3::new(pad0 + j as f32 * 5.5, 0.03, 0.0), Vec3::new(1.2, 0.03, 18.0), Color::rgb(0.2, 1.0, 0.5).scale(0.3 + 0.5 * g), Mat::Glow);
+        }
+        for s in [-1.0f32, 1.0] {
+            p::draw_aabb(Vec3::new(pad0 + 22.0, 0.03, s * 9.0), Vec3::new(50.0, 0.03, 0.25), Color::rgb(0.2, 1.0, 0.5), Mat::Glow);
         }
     }
 }
@@ -198,14 +275,13 @@ fn draw_buildings(w: &World, cam: Vec3, t: f32) {
 
 fn draw_building(b: &Building, bi: usize, detailed: bool, t: f32) {
     let [sx, h, sz] = b.size;
-    p::draw_aabb(Vec3::new(b.pos.x, h * 0.5, b.pos.y), Vec3::new(sx, h, sz), b.body, Mat::Lit);
-
     // Facade frame: local x runs along the facade, local z points out toward the road.
     let n = Vec3::new(b.front.x, 0.0, b.front.y);
     let u = Vec3::new(-b.front.y, 0.0, b.front.x);
-    let (width, depth) = if b.front.x.abs() > 0.5 { (sz, sx) } else { (sx, sz) };
+    let (width, depth) = (sx, sz);
     let face = Vec3::new(b.pos.x, 0.0, b.pos.y) + n * (depth * 0.5);
     let m = Mat3 { x: u, y: Y, z: n };
+    p::draw_box(Vec3::new(b.pos.x, h * 0.5, b.pos.y), Vec3::new(width, h, depth), &m, b.body, Mat::Lit);
     // Place a box at (along facade, height, out from facade).
     let put = |a: f32, y: f32, o: f32, size: Vec3, col: Color, mat: Mat| {
         p::draw_box(face + u * a + Y * y + n * o, size, &m, col, mat);
@@ -321,12 +397,14 @@ fn draw_barrier(pr: &Prop, t: f32, i: usize) {
 }
 
 fn draw_traffic_box(pr: &Prop, t: f32, i: usize) {
+    let m = Mat3::from_yaw(pr.yaw);
     let base = Vec3::from_xz(pr.pos, 0.0);
-    p::draw_aabb(base + Y * 0.8, Vec3::new(1.4, 1.6, 1.4), pr.color, Mat::Lit);
-    p::draw_aabb(base + Vec3::new(0.72, 0.9, 0.0), Vec3::new(0.05, 1.1, 1.0), Color::rgb(0.25, 0.28, 0.33), Mat::Lit);
-    p::draw_aabb(base + Vec3::new(0.75, 1.1, 0.0), Vec3::new(0.04, 0.4, 0.6), neon(1), Mat::Glow);
+    let put = |l: Vec3, s: Vec3, c: Color, mat: Mat| p::draw_box(base + m.mul_vec(l), s, &m, c, mat);
+    put(Vec3::new(0.0, 0.8, 0.0), Vec3::new(1.4, 1.6, 1.4), pr.color, Mat::Lit);
+    put(Vec3::new(0.72, 0.9, 0.0), Vec3::new(0.05, 1.1, 1.0), Color::rgb(0.25, 0.28, 0.33), Mat::Lit);
+    put(Vec3::new(0.75, 1.1, 0.0), Vec3::new(0.04, 0.4, 0.6), neon(1), Mat::Glow);
     let c = if pulse(t, 2.0, i as f32 * 1.3) > 0.5 { Color::rgb(1.0, 0.15, 0.15) } else { Color::rgb(0.2, 1.0, 0.3) };
-    p::draw_aabb(base + Y * 1.72, Vec3::new(0.5, 0.25, 0.5), c, Mat::Glow);
+    put(Vec3::new(0.0, 1.72, 0.0), Vec3::new(0.5, 0.25, 0.5), c, Mat::Glow);
 }
 
 fn draw_van(pr: &Prop) {
@@ -375,9 +453,13 @@ fn draw_finish_arch(cam_x: f32, t: f32) {
 
 // ================================================================= cars ===
 
+/// A car's origin and orientation: heading, tipped nose-up by its pitch, lifted by its height.
+fn car_frame(c: &Car) -> (Vec3, Mat3) {
+    (Vec3::from_xz(c.pos, c.y), Mat3::from_yaw(c.yaw).mul(&Mat3::rot_z(c.pitch)))
+}
+
 fn draw_car(c: &Car, driven: bool, t: f32) {
-    let m = Mat3::from_yaw(c.yaw);
-    let base = Vec3::from_xz(c.pos, 0.0);
+    let (base, m) = car_frame(c);
     let put = |l: Vec3, s: Vec3, col: Color, mat: Mat| p::draw_box(base + m.mul_vec(l), s, &m, col, mat);
     let body = c.color;
     let dark = Color::rgb(0.07, 0.07, 0.09);
@@ -419,6 +501,23 @@ fn draw_car(c: &Car, driven: bool, t: f32) {
         p::draw_box(wc + wm.mul_vec(Vec3::new(0.0, 0.0, z.signum() * 0.16)), Vec3::new(0.3, 0.3, 0.06), &wm2, YELLOW, Mat::Lit);
     }
 
+    // Turbo flames out of the back.
+    if c.turbo_on {
+        for z in [-0.6f32, 0.6] {
+            let fl = 1.0 + 0.7 * pulse(t, 45.0, z * 3.0);
+            put(Vec3::new(-2.35 - fl * 0.5, 0.5, z), Vec3::new(fl, 0.26, 0.26), Color::rgb(1.0, 0.45, 0.1), Mat::Glow);
+            put(Vec3::new(-2.3 - fl * 0.3, 0.5, z), Vec3::new(fl * 0.6, 0.12, 0.12), Color::rgb(1.0, 0.95, 0.6), Mat::Glow);
+        }
+    }
+    // In the air: a bright outline on the ground shows where the car will come down.
+    if c.airborne {
+        let gm = Mat3::from_yaw(c.yaw);
+        let g = Vec3::from_xz(c.pos, 0.05);
+        let glow = Color::rgb(0.3, 1.0, 0.5);
+        for (dx, dz, sx, sz) in [(0.0, -1.2, 4.6, 0.12), (0.0, 1.2, 4.6, 0.12), (-2.4, 0.0, 0.12, 2.4), (2.4, 0.0, 0.12, 2.4)] {
+            p::draw_box(g + gm.mul_vec(Vec3::new(dx, 0.0, dz)), Vec3::new(sx, 0.05, sz), &gm, glow, Mat::Glow);
+        }
+    }
     // Beacon so you can spot a car across the lot.
     if !driven {
         let k = 0.55 + 0.45 * pulse(t, 4.0, 0.0);
@@ -465,6 +564,92 @@ fn draw_zombie(z: &Zombie) {
     for (k, s) in [-1.0f32, 1.0].iter().enumerate() {
         let wob = if walking { (z.phase * 2.0 + k as f32 * PI).sin() * 0.12 } else { 0.0 };
         limb(Vec3::new(0.05, 1.32 + bob, s * 0.38), 0.7, Vec3::new(0.2, 0.7, 0.2), FRAC_PI_2 - 0.1 + wob, skin.scale(0.88));
+    }
+}
+
+// ================================================================ crew ===
+
+/// A friendly clown: baggy suit, ruffle collar, white face, red nose, rainbow
+/// hair and giant shoes. Waiting clowns wave and have a yellow "join me" beam.
+fn draw_ally(a: &Ally, t: f32) {
+    let m = Mat3::from_yaw(a.yaw);
+    let origin = Vec3::from_xz(a.pos, a.y);
+    let waiting = !a.recruited;
+    let riding = a.seat.is_some();
+    let moving = a.vel.len() > 0.5;
+    let swing = if moving { a.phase.sin() * 0.65 } else { 0.0 };
+    let bob = if moving { (a.phase * 2.0).sin().abs() * 0.06 } else { 0.0 };
+
+    let part = |c: Vec3, s: Vec3, col: Color| p::draw_blob(origin + m.mul_vec(c), s * 0.56, &m, col, Mat::Lit);
+    let limb = |pivot: Vec3, len: f32, s: Vec3, ang: f32, col: Color| {
+        let r = Mat3::rot_z(ang);
+        let c = pivot + r.mul_vec(Vec3::new(0.0, -len * 0.5, 0.0));
+        p::draw_blob(origin + m.mul_vec(c), s * 0.56, &m.mul(&r), col, Mat::Lit);
+    };
+    let pants = a.suit.scale(0.75);
+    limb(Vec3::new(0.0, 0.72, 0.17), 0.72, Vec3::new(0.34, 0.72, 0.34), swing, pants);
+    limb(Vec3::new(0.0, 0.72, -0.17), 0.72, Vec3::new(0.34, 0.72, 0.34), -swing, pants);
+    // Giant shoes.
+    for z in [-0.17f32, 0.17] {
+        part(Vec3::new(0.2, 0.08, z), Vec3::new(0.62, 0.2, 0.3), RED);
+        part(Vec3::new(0.46, 0.1, z), Vec3::new(0.1, 0.12, 0.12), YELLOW);
+    }
+    // Baggy polka-dot torso with a ruffled collar.
+    part(Vec3::new(0.0, 1.05 + bob, 0.0), Vec3::new(0.5, 0.74, 0.74), a.suit);
+    for (dy, dz) in [(1.2f32, -0.22f32), (1.0, 0.12), (0.88, -0.1), (1.25, 0.25)] {
+        part(Vec3::new(0.25, dy + bob, dz), Vec3::new(0.06, 0.14, 0.14), WHITE);
+    }
+    part(Vec3::new(0.0, 1.42 + bob, 0.0), Vec3::new(0.42, 0.14, 0.56), WHITE);
+    // Head: white face, red nose, eyes, big smile, rainbow hair.
+    part(Vec3::new(0.03, 1.68 + bob, 0.0), Vec3::new(0.44, 0.44, 0.44), WHITE);
+    part(Vec3::new(0.25, 1.65 + bob, 0.0), Vec3::new(0.16, 0.16, 0.16), RED);
+    for s in [-1.0f32, 1.0] {
+        part(Vec3::new(0.24, 1.76 + bob, s * 0.11), Vec3::new(0.04, 0.09, 0.09), Color::rgb(0.05, 0.05, 0.1));
+        part(Vec3::new(0.0, 1.9 + bob, s * 0.27), Vec3::new(0.3, 0.3, 0.3), a.hair);
+    }
+    part(Vec3::new(0.22, 1.55 + bob, 0.0), Vec3::new(0.04, 0.06, 0.3), RED);
+    part(Vec3::new(-0.02, 2.0 + bob, 0.0), Vec3::new(0.34, 0.26, 0.44), a.hair.lerp(WHITE, 0.25));
+    // Arms: pistol arm points when shooting; riders and waiting clowns wave.
+    let wave = (t * 7.0 + a.phase).sin() * 0.3;
+    if a.aim_t > 0.0 {
+        limb(Vec3::new(0.05, 1.32 + bob, 0.4), 0.7, Vec3::new(0.22, 0.7, 0.22), FRAC_PI_2 - 0.05, a.suit.lerp(WHITE, 0.2));
+        part(Vec3::new(0.8, 1.3 + bob, 0.4), Vec3::new(0.3, 0.2, 0.12), neon(1));
+    } else if waiting || riding {
+        limb(Vec3::new(0.05, 1.32 + bob, 0.4), 0.7, Vec3::new(0.22, 0.7, 0.22), PI * 0.82 + wave, a.suit.lerp(WHITE, 0.2));
+    } else {
+        limb(Vec3::new(0.05, 1.32 + bob, 0.4), 0.7, Vec3::new(0.22, 0.7, 0.22), -swing, a.suit.lerp(WHITE, 0.2));
+    }
+    let left = if riding { PI * 0.8 - wave } else { swing };
+    limb(Vec3::new(0.05, 1.32 + bob, -0.4), 0.7, Vec3::new(0.22, 0.7, 0.22), left, a.suit.lerp(WHITE, 0.2));
+    if waiting {
+        let k = 0.5 + 0.5 * pulse(t, 3.0, a.phase);
+        p::draw_aabb(origin + Vec3::new(0.0, 6.0, 0.0), Vec3::new(0.35, 10.0, 0.35), YELLOW.scale(k), Mat::Glow);
+    }
+}
+
+/// The clown-laser burst: a spinning ring of rainbow spokes and a thick beam
+/// from the clown to every zombie that got zapped.
+fn draw_laser_burst(g: &Game) {
+    if g.laser_burst <= 0.0 {
+        return;
+    }
+    let k = (g.laser_burst / LASER_TTL).clamp(0.0, 1.0); // 1 -> 0
+    // Beams start a couple of metres out and a bit below the eyes, so they
+    // never fill the screen from inside the camera.
+    let o = g.laser_origin - Vec3::new(0.0, 0.35, 0.0);
+    for i in 0..16 {
+        let a = i as f32 * TAU / 16.0 + (1.0 - k) * 4.0;
+        let dir = Vec3::new(a.cos(), 0.0, a.sin());
+        let reach = LASER_RANGE * (1.0 - 0.35 * k);
+        let end = Vec3::new(o.x, o.y.max(0.4), o.z) + dir * reach;
+        beam(o + dir * 2.2, end, 0.04 + 0.08 * k, neon(i));
+    }
+    for l in &g.lasers {
+        let from = l.from - Vec3::new(0.0, 0.35, 0.0);
+        let start = from + (l.to - from).norm() * 2.2;
+        beam(start, l.to, 0.05 + 0.12 * k, neon(1).lerp(WHITE, 0.4));
+        beam(start, l.to, 0.02 + 0.04 * k, WHITE);
+        p::draw_ball(l.to, 0.25 + 0.7 * k, neon(0));
     }
 }
 
@@ -536,14 +721,14 @@ fn draw_viewmodel_foot(game: &Game, cam: &CamView) {
 /// Everything is positioned in the CAR's frame (not the camera's) so it stays
 /// put when you turn your head.
 fn draw_viewmodel_car(_game: &Game, c: &Car, _cam: &CamView) {
-    let m = Mat3::from_yaw(c.yaw);
-    let base = Vec3::from_xz(c.pos, 0.0);
+    let (base, m) = car_frame(c);
     let put = |l: Vec3, s: Vec3, col: Color, mat: Mat| p::draw_box(base + m.mul_vec(l), s, &m, col, mat);
 
     put(Vec3::new(0.95, 1.08, 0.0), Vec3::new(0.5, 0.12, 1.95), Color::rgb(0.1, 0.1, 0.16), Mat::Lit);
-    let speed_t = (c.speed.abs() / car::MAX_SPEED).clamp(0.0, 1.0);
+    let speed_t = (c.speed.abs() / car::TURBO_SPEED).clamp(0.0, 1.0);
     let bar = 0.1 + 0.7 * speed_t;
-    put(Vec3::new(0.72, 1.15, -0.85 + bar * 0.5), Vec3::new(0.03, 0.03, bar), neon(1).lerp(neon(0), speed_t), Mat::Glow);
+    let bar_col = if c.turbo_on { Color::rgb(1.0, 0.6, 0.1) } else { neon(1).lerp(neon(0), speed_t) };
+    put(Vec3::new(0.72, 1.15, -0.85 + bar * 0.5), Vec3::new(0.03, 0.03, bar), bar_col, Mat::Glow);
     for s in [-1.0f32, 1.0] {
         put(Vec3::new(1.0, 1.6, s * 0.97), Vec3::new(0.1, 1.0, 0.1), Color::rgb(0.1, 0.1, 0.16), Mat::Lit);
         put(Vec3::new(0.75, 1.25, s * 1.1), Vec3::new(0.2, 0.12, 0.22), Color::rgb(0.12, 0.12, 0.18), Mat::Lit); // side mirrors
@@ -590,9 +775,17 @@ fn panel(x: f32, y: f32, w: f32, h: f32, border: Color) {
     p::draw_rect(x, y, w, h, Color::rgba(0.05, 0.02, 0.12, 0.82));
 }
 
+/// A labelled progress bar (turbo tank, clown power).
+fn gauge(x: f32, y: f32, w: f32, h: f32, frac: f32, col: Color, label: &str, s: f32) {
+    p::draw_rect(x - 2.0, y - 2.0, w + 4.0, h + 4.0, Color::rgba(0.0, 0.0, 0.0, 0.7));
+    p::draw_rect(x, y, w, h, Color::rgba(0.1, 0.05, 0.2, 0.85));
+    p::draw_rect(x, y, w * frac.clamp(0.0, 1.0), h, col);
+    shadow_text(label, x + 8.0 * s, y + h - 5.0 * s, 18.0 * s, WHITE);
+}
+
 fn objective(g: &Game) -> String {
     if let Some(ci) = g.drive {
-        format!("FINISH ARCH {:.0} m away. Run them over, or F to get out and shoot", (world::FINISH_X - g.cars[ci].pos.x).max(0.0))
+        format!("FINISH ARCH {:.0} m away. Shift = turbo, ramps = air, F = get out", (world::FINISH_X - g.cars[ci].pos.x).max(0.0))
     } else {
         "Shoot zombies (click). Press E next to any car to get in and drive".to_owned()
     }
@@ -646,6 +839,50 @@ fn draw_hud(g: &Game) {
     panel(cx - tw * 0.5 - 16.0 * s, 14.0 * s, tw + 32.0 * s, 40.0 * s, neon(2));
     p::draw_text(&obj, cx - tw * 0.5, 42.0 * s, 26.0 * s, WHITE);
 
+    // Turbo + clown-power gauges and the crew count (bottom left).
+    let (turbo, turbo_on) = match g.drive {
+        Some(ci) => (g.cars[ci].turbo, g.cars[ci].turbo_on),
+        None => (g.player.turbo, g.player.turbo_on),
+    };
+    let ready = g.laser_charge >= 1.0;
+    let (bx, bw, bh) = (20.0 * s, 280.0 * s, 24.0 * s);
+    let by = sz.y - 150.0 * s;
+    let turbo_col = if turbo_on { Color::rgb(1.0, 0.85, 0.2) } else { Color::rgb(1.0, 0.45, 0.1) };
+    gauge(bx, by, bw, bh, turbo, turbo_col, "TURBO  [Shift]", s);
+    let laser_col = if ready { neon(0).lerp(neon(1), pulse(g.anim_time, 8.0, 0.0)) } else { Color::rgb(0.55, 0.3, 0.9) };
+    let laser_label = if ready { "CLOWN LASERS READY  [Right-click / G]" } else { "CLOWN POWER" };
+    gauge(bx, by + 36.0 * s, bw, bh, g.laser_charge, laser_col, laser_label, s);
+    shadow_text(&format!("CREW  {}/{}", g.crew_size(), crate::allies::MAX_CREW), bx, by + 86.0 * s, 26.0 * s, YELLOW);
+
+    // SURROUNDED call-out.
+    if g.surrounded && ready {
+        let txt = "SURROUNDED!  RIGHT-CLICK / G = CLOWN LASERS";
+        let k = pulse(g.anim_time, 10.0, 0.0);
+        shadow_text_c(txt, cx, sz.y * 0.3, 38.0 * s, neon(0).lerp(YELLOW, k));
+    }
+    // Air time while flying.
+    if let Some(ci) = g.drive {
+        if g.cars[ci].airborne {
+            shadow_text_c(&format!("AIR  {:.1}s", g.cars[ci].air_time), cx, sz.y * 0.22, 40.0 * s, neon(4));
+        }
+    }
+    // Speed streaks at the screen edges while the turbo burns.
+    if turbo_on {
+        let step = (g.anim_time * 30.0).floor();
+        for i in 0..26 {
+            let seed = i as f32 * 1.37 + step * 0.73;
+            let edge = hash01(seed) * sz.x * 0.2;
+            let x = if i % 2 == 0 { edge } else { sz.x - edge };
+            let y = hash01(seed * 2.3) * sz.y;
+            let len = (50.0 + hash01(seed * 3.1) * 130.0) * s;
+            p::draw_rect(x, y, 2.5 * s, len, Color::rgba(0.85, 0.95, 1.0, 0.35));
+        }
+    }
+    // Flash when the lasers fire.
+    if g.laser_flash > 0.0 {
+        p::draw_rect(0.0, 0.0, sz.x, sz.y, Color::rgba(1.0, 0.4, 0.95, (g.laser_flash * 0.9).min(0.35)));
+    }
+
     // Toast message and interaction prompt.
     if let Some((msg, _)) = &g.toast {
         shadow_text_c(msg, cx, 86.0 * s, 26.0 * s, YELLOW);
@@ -689,6 +926,18 @@ fn draw_labels(g: &Game) {
             p::draw_rect(sp.x - w * 0.5 - 8.0, sp.y - size * 0.85, w + 16.0, size * 1.1, Color::rgba(0.0, 0.0, 0.0, 0.55));
             p::draw_text(&txt, sp.x - w * 0.5, sp.y, size, col);
         }
+    }
+    for a in g.allies.iter().filter(|a| !a.recruited) {
+        let Some(sp) = p::world_to_screen(Vec3::from_xz(a.pos, a.y + 2.9)) else { continue };
+        let dist = (Vec3::from_xz(a.pos, 0.0) - g.camera().pos).len();
+        if dist > 90.0 {
+            continue;
+        }
+        let size = (30.0 * s * (22.0 / dist.max(6.0)).clamp(0.55, 1.3)).max(14.0);
+        let txt = "JOIN US!";
+        let w = p::text_width(txt, size);
+        p::draw_rect(sp.x - w * 0.5 - 8.0, sp.y - size * 0.85, w + 16.0, size * 1.1, Color::rgba(0.0, 0.0, 0.0, 0.55));
+        p::draw_text(txt, sp.x - w * 0.5, sp.y, size, YELLOW);
     }
     for pu in &g.popups {
         let k = 1.0 - pu.ttl / 0.9;
