@@ -4,6 +4,7 @@
 //! fast frames are rendered: each frame we add the elapsed real time to an
 //! accumulator and run as many fixed ticks as fit. This keeps physics and AI
 //! deterministic and independent of frame rate.
+mod allies;
 mod car;
 mod collision;
 mod icon;
@@ -48,6 +49,8 @@ async fn app() {
         input.interact |= fresh.interact;
         input.exit_car |= fresh.exit_car;
         input.shoot |= fresh.shoot;
+        input.turbo = fresh.turbo;
+        input.laser |= fresh.laser;
         input.confirm |= fresh.confirm;
         input.pause |= fresh.pause;
         input.restart |= fresh.restart;

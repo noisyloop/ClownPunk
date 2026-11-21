@@ -15,6 +15,7 @@ pub const RADIUS: f32 = 0.5;
 pub const EYE_HEIGHT: f32 = 1.55;
 pub const MAX_HEALTH: i32 = 3;
 const TOP_SPEED: f32 = 7.0;
+const TURBO_TOP_SPEED: f32 = 12.0;
 const LOOK_SENS: f32 = 0.0025;
 
 pub struct Player {
@@ -25,6 +26,12 @@ pub struct Player {
     /// Height of the board above the ground (ollie) and vertical speed.
     pub hop: f32,
     pub hop_vel: f32,
+    /// Height of the ground (a ramp surface) under the board.
+    pub ground_y: f32,
+    /// Turbo tank 0..1 (Shift): a burst of speed on the skateboard.
+    pub turbo: f32,
+    pub turbo_on: bool,
+    turbo_locked: bool,
     pub health: i32,
     pub hurt_timer: f32,   // invulnerability after a hit
     pub damage_flash: f32, // red screen flash
@@ -45,6 +52,10 @@ impl Player {
             pitch: 0.0,
             hop: 0.0,
             hop_vel: 0.0,
+            ground_y: 0.0,
+            turbo: 1.0,
+            turbo_on: false,
+            turbo_locked: false,
             health: MAX_HEALTH,
             hurt_timer: 0.0,
             damage_flash: 0.0,
@@ -63,7 +74,7 @@ impl Player {
 
     /// Camera position.
     pub fn eye(&self) -> Vec3 {
-        Vec3::from_xz(self.pos, EYE_HEIGHT + self.hop)
+        Vec3::from_xz(self.pos, EYE_HEIGHT + self.hop + self.ground_y)
     }
 
     /// Mouse look: yaw follows horizontal motion, pitch vertical (clamped so
@@ -103,8 +114,17 @@ impl Player {
         self.muzzle = (self.muzzle - dt).max(0.0);
 
         let grounded = self.hop <= 0.001 && self.hop_vel <= 0.0;
-        let max_speed = TOP_SPEED;
-        let accel = 7.0;
+        // Turbo (Shift): same tank rules as the car's nitro.
+        if self.turbo <= 0.0 {
+            self.turbo_locked = true;
+        }
+        if self.turbo >= 0.25 {
+            self.turbo_locked = false;
+        }
+        self.turbo_on = input.turbo && !self.turbo_locked && self.turbo > 0.0;
+        self.turbo = if self.turbo_on { (self.turbo - 0.28 * dt).max(0.0) } else { (self.turbo + 0.16 * dt).min(1.0) };
+        let max_speed = if self.turbo_on { TURBO_TOP_SPEED } else { TOP_SPEED };
+        let accel = if self.turbo_on { 16.0 } else { 7.0 };
 
         // 1) Steering: A/D rotate the heading (mouse already did in `look`).
         let steer = (input.right as i32 - input.left as i32) as f32;
@@ -119,7 +139,7 @@ impl Player {
 
         // 3) Push / brake / roll.
         if grounded {
-            if input.forward && vf < max_speed {
+            if (input.forward || self.turbo_on) && vf < max_speed {
                 vf += accel * dt;
             }
             if input.back {
