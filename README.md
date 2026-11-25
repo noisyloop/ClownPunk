@@ -46,6 +46,15 @@ GL drawing, audio, random numbers).
   <sub>Your clown crew follows you, rides on your car and shoots zombies.</sub>
 </p>
 
+<p align="center">
+  <img src="docs/ufo-parked.png" alt="The parked UFO in the lot" width="720"><br>
+  <sub>A UFO is parked in the lot. Stand next to it and press E.</sub>
+</p>
+<p align="center">
+  <img src="docs/ufo-fly.png" alt="Flying the UFO and shooting a saucer" width="720"><br>
+  <sub>Fly it down the Strip and shoot the wild saucers.</sub>
+</p>
+
 ## Download (no install, no Rust needed)
 
 Linux only. Unpack and run `clownpunk`:
@@ -83,12 +92,25 @@ turn the music off.
 | **Left click**         | shoot the pistol                           | -                       |
 | **Shift** (hold)       | turbo: a burst of speed (tank drains, then refills) | nitro: far past top speed, works in the air too |
 | **Right click** / **G**| **clown lasers** (when the power bar is full) | same, from the car   |
-| **E**                  | get into the nearest car (stand next to it) | -                      |
+| **E**                  | get into the nearest car, or board the parked UFO (stand next to it) | -    |
 | **F**                  | -                                          | get out of the car      |
 | **Esc**                | pause / resume                             | pause / resume          |
 | **R**                  | restart (pause, Game Over and Win screens) | same                    |
 | **M**                  | music on / off                             | same                    |
 | **Q**                  | quit (title and pause screens)             | same                    |
+
+### Flying the UFO
+
+| Key / mouse   | In the UFO                                              |
+|---------------|---------------------------------------------------------|
+| **Mouse**     | turn the UFO (yaw) and aim the cannons (pitch)          |
+| **W** / **S** | fly forward / back                                      |
+| **A** / **D** | strafe left / right                                     |
+| **Space** / **C** (or Ctrl) | climb / descend (hold)                    |
+| **Left click**| fire the twin cannons                                   |
+| **Shift** (hold) | boost (tank drains, then refills)                    |
+| **Right click** / **G** | clown lasers, same as everywhere           |
+| **F**         | land (descend to about 3 m) and step out                |
 
 ## How to play
 
@@ -122,7 +144,23 @@ turn the music off.
    jumps. When 3 or more zombies are around you, **SURROUNDED!** flashes: press
    **right click** (or **G**) and your eyes fire a ring of lasers that kills every
    zombie within 24 m, on foot or in a car.
-10. Cross the glowing **finish arch** in a car to win.
+10. **The UFO.** A purple saucer is parked in the lot (look for the purple beacon and
+    the "FLY!" label). Press **E** beside it to board. Wild saucers (about 40 along the
+    lot and the Strip) wander at 4-24 m. Shoot them with the UFO cannons, or even the pistol,
+    for a "BOOM!" and some clown power. The saucers avoid each other and your UFO with the
+    same **collision-avoidance AI** (see below), and your UFO has a **co-pilot** that runs
+    it too: if you fly straight at a saucer, "CO-PILOT AVOIDING COLLISION" flashes and it
+    steers you around. Press **F** low to land and step out.
+11. Cross the glowing **finish arch** in a car (or the UFO) to win.
+
+### Collision-avoidance AI
+
+Every saucer predicts its neighbours' closest approach over the next 3.5 seconds from
+their relative position and velocity. If the gap would shrink inside a safety bubble,
+it accelerates away from the predicted meeting point (sideways first, so head-on
+saucers slide past each other), harder the closer and sooner the danger. A hard
+push-apart backstop prevents hulls from ever overlapping. See `avoidance` in
+`src/ufo.rs`.
 
 ## Code map (read in this order)
 
@@ -132,6 +170,7 @@ turn the music off.
 | `src/state.rs` | The **game state machine** (`Mode`) and the per-tick simulation that connects everything: shooting, interactions, zombie contact, win/lose. Also holds the tests. |
 | `src/player.rs` | **Skateboard movement**: heading vs velocity, grip and drift, ollie, mouse look, gun wobble. |
 | `src/car.rs` | Arcade **car driving**, the **turbo** tank, and **ramp jumps** (height, gravity, landing assist). |
+| `src/ufo.rs` | **Flying saucers**: your UFO's flight model, wild saucer wandering, and the **collision-avoidance AI** (`avoidance`). |
 | `src/allies.rs` | Your **clown crew**: follow / ride / shoot. |
 | `src/zombies.rs` | Zombie **AI states** (walking / dead) and bullet hit volumes. |
 | `src/world.rs` | The static level: lot, the **winding Strip** (`road_z`), **ramps**, casinos, lamps, palms, obstacles. |
@@ -188,7 +227,8 @@ plus the new features: the road's curves stay drivable, turbo speed and tank,
 every ramp launches the car and lands it on the road inside the clear zone (slow,
 fast and crooked approaches), an autopilot drives the whole winding Strip with
 all five jumps, clown lasers (on foot and in a car), crew following / riding /
-shooting, and recruiting.
+shooting, and recruiting, plus the UFO: boarding / landing, cannons and the pistol hitting saucers, and
+the avoidance AI keeping saucers (and the co-pilot-assisted UFO) from ever touching.
 
 Headless screenshot smoke test (Linux, needs `xvfb`):
 

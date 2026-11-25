@@ -179,7 +179,46 @@ impl Smoke {
                 self.shot("laser");
             }
         }
-        self.frame > 900 || (self.laser_at > 0 && self.frame > self.laser_at + 14 && self.pending.is_none())
+        // Scenes: the parked UFO in the lot, then flying it and shooting a saucer.
+        if self.laser_at > 0 {
+            let f = self.frame.saturating_sub(self.laser_at);
+            match f {
+                16 => {
+                    game.zombies.clear();
+                    game.world.statics.retain(|o| o.center.x > 100.0);
+                    game.cars.iter_mut().for_each(|c| c.pos = Vec2::new(500.0, 40.0));
+                    let up = game.ufo.pos;
+                    game.player.pos = up + Vec2::new(-9.0, 4.0);
+                    game.player.yaw = (-4.0f32).atan2(9.0);
+                    game.player.pitch = 0.1;
+                    game.player.vel = Vec2::ZERO;
+                    game.drive = None;
+                    game.say("", 0.1);
+                }
+                22 => self.shot("ufo_parked"),
+                24 => {
+                    game.player.pos = game.ufo.pos + Vec2::new(-3.5, 0.0);
+                    input.interact = true;
+                }
+                26 => {
+                    game.ufo.pos = Vec2::new(-30.0, 0.0);
+                    game.ufo.y = 8.0;
+                    game.ufo.yaw = 0.0;
+                    game.ufo.pitch = 0.05;
+                    game.saucers.clear();
+                    for (x, z, y, k) in [(14.0f32, 0.0f32, 8.0f32, 0usize), (30.0, -9.0, 12.0, 1), (24.0, 11.0, 7.0, 2)] {
+                        let mut u = crate::ufo::Ufo::wild(0.0, crate::world::neon(k + 4));
+                        u.pos = Vec2::new(-30.0 + x, z);
+                        u.y = y;
+                        game.saucers.push(u);
+                    }
+                }
+                28 => input.shoot = true,
+                31 => self.shot("ufo_fly"),
+                _ => {}
+            }
+        }
+        self.frame > 900 || (self.laser_at > 0 && self.frame > self.laser_at + 33 && self.pending.is_none())
     }
 
     /// Called after drawing, before the buffer swap.

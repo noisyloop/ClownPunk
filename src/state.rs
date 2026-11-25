@@ -20,6 +20,7 @@ use crate::collision::Obb;
 use crate::math::{angle_diff, approach, Color, Vec2, Vec3};
 use crate::platform::{rand_chance, rand_range, Input};
 use crate::player::{self, Player};
+use crate::ufo::{self, Neighbour, Ufo};
 use crate::world::{self, World};
 use crate::zombies::{self, ZState, Zombie};
 
@@ -51,6 +52,13 @@ pub struct Laser {
 pub const LASER_RANGE: f32 = 24.0;
 pub const LASER_TTL: f32 = 0.6;
 
+/// A short fireball where a saucer was shot down.
+pub struct Boom {
+    pub pos: Vec3,
+    pub ttl: f32,
+}
+pub const BOOM_TTL: f32 = 0.7;
+
 /// Floating comic-book text ("BONK!") anchored in the world.
 pub struct Popup {
     pub pos: Vec3,
@@ -74,6 +82,10 @@ const SHOT_COOLDOWN: f32 = 0.35;
 /// How close to a car's centre you must stand to climb in.
 const ENTER_RANGE: f32 = 4.2;
 const PLAYER_START: Vec2 = Vec2::new(-39.0, 0.0);
+/// Where your UFO is parked in the lot.
+const UFO_SPOT: Vec2 = Vec2::new(-28.0, -16.0);
+/// Wild saucers farther than this from you aren't simulated.
+const SAUCER_ACTIVE: f32 = 160.0;
 pub const FOV_FOOT: f32 = 72.0;
 /// How far away Strip zombies notice you (a car covers this quickly).
 const STRIP_AGGRO: f32 = 32.0;
@@ -94,6 +106,13 @@ pub struct Game {
     /// Your crew: clowns that follow, ride along and shoot (or still wait to join).
     pub allies: Vec<Ally>,
     pub cars: Vec<Car>,
+    /// Your UFO (parked until you board it) and whether you are flying it.
+    pub ufo: Ufo,
+    pub flying: bool,
+    /// Wild saucers roaming the lot and the Strip. They avoid each other and you.
+    pub saucers: Vec<Ufo>,
+    pub saucers_down: u32,
+    pub booms: Vec<Boom>,
     pub drive: Option<usize>,
     /// Zombies killed this run (shots and roadkill).
     pub kills: u32,
@@ -131,6 +150,11 @@ impl Game {
             zombies: Vec::new(),
             allies: Vec::new(),
             cars: Vec::new(),
+            ufo: Ufo::new(UFO_SPOT, 0.0, ufo::REST_Y, Color::rgb(0.85, 0.2, 0.95)),
+            flying: false,
+            saucers: Vec::new(),
+            saucers_down: 0,
+            booms: Vec::new(),
             drive: None,
             kills: 0,
             run_time: 0.0,
@@ -154,6 +178,7 @@ impl Game {
         g.spawn_cars();
         g.spawn_zombies();
         g.spawn_allies();
+        g.spawn_saucers();
         g
     }
 
@@ -181,7 +206,7 @@ impl Game {
         while self.cars.len() < want && tries < 500 {
             tries += 1;
             let pos = Vec2::new(rand_range(-36.0, 10.0), rand_range(-23.0, 23.0));
-            if pos.dist(PLAYER_START) < 12.0 {
+            if pos.dist(PLAYER_START) < 12.0 || pos.dist(UFO_SPOT) < 10.0 {
                 continue;
             }
             if self.cars.iter().any(|c| c.pos.dist(pos) < 9.0) {
@@ -238,6 +263,34 @@ impl Game {
         }
     }
 
+    /// Wild saucers: a few over the lot, then a pair every ~100 m down the Strip.
+    fn spawn_saucers(&mut self) {
+        let palette = [Color::rgb(0.3, 1.0, 0.45), Color::rgb(0.2, 0.9, 1.0), Color::rgb(1.0, 0.85, 0.2), Color::rgb(1.0, 0.4, 0.3)];
+        let mut n = 0usize;
+        // Wild saucers start well apart so the avoidance AI never begins in a collision.
+        let place = |saucers: &mut Vec<Ufo>, x: f32, n: usize| {
+            for _ in 0..30 {
+                let u = Ufo::wild(x, palette[n % palette.len()]);
+                if saucers.iter().all(|o| (o.centre() - u.centre()).len() > 14.0) {
+                    saucers.push(u);
+                    return;
+                }
+            }
+        };
+        for x in [-10.0f32, 0.0, 10.0, 30.0] {
+            place(&mut self.saucers, x, n);
+            n += 1;
+        }
+        let mut x = world::STRIP_START + 60.0;
+        while x < world::FINISH_X - 30.0 {
+            for _ in 0..2 {
+                place(&mut self.saucers, x + rand_range(-20.0, 20.0), n);
+                n += 1;
+            }
+            x += rand_range(70.0, 110.0);
+        }
+    }
+
     pub fn crew_size(&self) -> usize {
         self.allies.iter().filter(|a| a.recruited).count()
     }
@@ -261,6 +314,9 @@ impl Game {
             if Some(i) != skip_car {
                 v.push(c.obb());
             }
+        }
+        if !self.flying {
+            v.push(self.ufo.obb());
         }
         v
     }
@@ -325,10 +381,21 @@ impl Game {
         self.popups.iter_mut().for_each(|p| p.ttl -= dt);
         self.popups.retain(|p| p.ttl > 0.0);
 
-        match self.drive {
-            None => self.update_on_foot(input, dt),
-            Some(ci) => self.update_driving(ci, input, dt),
+        self.booms.iter_mut().for_each(|b| b.ttl -= dt);
+        self.booms.retain(|b| b.ttl > 0.0);
+
+        if self.flying {
+            self.update_flying(input, dt);
+        } else {
+            match self.drive {
+                None => self.update_on_foot(input, dt),
+                Some(ci) => self.update_driving(ci, input, dt),
+            }
         }
+        if !self.flying {
+            self.ufo.update_parked(dt, &self.world);
+        }
+        self.update_saucers(dt);
 
         // Cars nobody is driving coast to a stop and animate their trunks.
         for i in 0..self.cars.len() {
@@ -363,16 +430,22 @@ impl Game {
         self.interactions(input);
     }
 
-    /// HITSCAN SHOT: an instantaneous ray from the eye along the (wobbly)
-    /// aim direction. We find the nearest thing it touches among: world boxes,
-    /// the ground, and zombie hit-spheres. If a zombie is nearest, it dies.
+    /// The pistol: a shot from the eye along the (wobbly) aim direction.
     fn fire(&mut self, obstacles: &[Obb]) {
         self.player.shoot_cd = SHOT_COOLDOWN;
         self.player.recoil = 1.0;
         self.player.muzzle = 0.07;
-
         let origin = self.player.eye();
         let dir = self.player.shot_dir();
+        let right = Vec2::from_yaw(self.player.yaw).right_of();
+        let muzzle = origin + Vec3::from_xz(right * 0.22, -0.18) + dir * 0.6;
+        self.shoot(origin, dir, muzzle, obstacles, false);
+    }
+
+    /// HITSCAN SHOT: an instantaneous ray from `origin` along `dir`. We find
+    /// the nearest thing it touches among: world boxes, the ground, zombie
+    /// hit-spheres and saucers. A zombie or saucer that is nearest dies.
+    fn shoot(&mut self, origin: Vec3, dir: Vec3, muzzle: Vec3, obstacles: &[Obb], from_ufo: bool) {
         let mut best = SHOT_RANGE;
         for b in obstacles {
             if let Some(t) = b.ray(origin, dir, best) {
@@ -392,11 +465,25 @@ impl Game {
                 hit = Some(i);
             }
         }
+        let mut saucer_hit = None;
+        for (i, u) in self.saucers.iter().enumerate() {
+            if !u.alive {
+                continue;
+            }
+            if let Some(t) = crate::collision::ray_sphere(origin, dir, u.centre(), ufo::RADIUS) {
+                if t < best {
+                    best = t;
+                    saucer_hit = Some(i);
+                    hit = None;
+                }
+            }
+        }
 
-        let right = Vec2::from_yaw(self.player.yaw).right_of();
-        let muzzle = origin + Vec3::from_xz(right * 0.22, -0.18) + dir * 0.6;
-        self.tracers.push(Tracer { from: muzzle, to: origin + dir * best, ttl: 0.12, ally: false });
+        self.tracers.push(Tracer { from: muzzle, to: origin + dir * best, ttl: 0.12, ally: from_ufo });
 
+        if let Some(i) = saucer_hit {
+            self.destroy_saucer(i);
+        }
         if let Some(i) = hit {
             let away = Vec2::new(dir.x, dir.z).norm();
             let pos = self.zombies[i].pos;
@@ -407,6 +494,16 @@ impl Game {
             let text = texts[(rand_range(0.0, 4.0) as usize) % 4];
             self.popups.push(Popup { pos: Vec3::from_xz(pos, 2.2), text, ttl: 0.9 });
         }
+    }
+
+    fn destroy_saucer(&mut self, i: usize) {
+        let c = self.saucers[i].centre();
+        self.saucers[i].alive = false;
+        self.saucers_down += 1;
+        self.laser_charge = (self.laser_charge + 0.12).min(1.0);
+        self.booms.push(Boom { pos: c, ttl: BOOM_TTL });
+        self.popups.push(Popup { pos: c + Vec3::new(0.0, 2.5, 0.0), text: "BOOM!", ttl: 0.9 });
+        self.shake = self.shake.max(0.3);
     }
 
     /// Work out what E would do right now (also drives the on-screen prompt):
@@ -421,12 +518,123 @@ impl Game {
                 best = Some((ci, d));
             }
         }
-        if let Some((ci, _)) = best {
+        let ufo_d = self.ufo.pos.dist(pp);
+        if ufo_d < ENTER_RANGE + 0.8 && best.map_or(true, |(_, bd)| ufo_d < bd) {
+            self.prompt = Some("E: Board the UFO and fly".to_owned());
+            if input.interact {
+                self.enter_ufo();
+            }
+        } else if let Some((ci, _)) = best {
             self.prompt = Some("E: Get in and drive".to_owned());
             if input.interact {
                 self.enter_car(ci);
             }
         }
+    }
+
+    // ------------------------------------------------------------ flying ---
+
+    fn enter_ufo(&mut self) {
+        self.flying = true;
+        self.ufo.yaw = self.player.yaw;
+        self.ufo.pitch = self.player.pitch.clamp(-0.8, 0.8);
+        self.ufo.vel = Vec3::ZERO;
+        self.player.vel = Vec2::ZERO;
+        self.player.hop = 0.0;
+        self.say("UFO! Mouse aims, W/S/A/D fly, Space/C up & down, click shoots saucers. Shift = boost, F = land & exit.", 7.0);
+    }
+
+    /// Everything the avoidance AI should dodge: all live wild saucers nearby.
+    fn saucer_neighbours(&self, skip: Option<usize>, near: Vec2) -> Vec<Neighbour> {
+        self.saucers
+            .iter()
+            .enumerate()
+            .filter(|(i, u)| u.alive && Some(*i) != skip && u.pos.dist(near) < 90.0)
+            .map(|(_, u)| Neighbour { pos: u.centre(), vel: u.vel })
+            .collect()
+    }
+
+    fn update_flying(&mut self, input: &Input, dt: f32) {
+        self.player.hurt_timer = (self.player.hurt_timer - dt).max(0.0);
+        self.player.damage_flash = (self.player.damage_flash - dt).max(0.0);
+        self.ufo.yaw += input.look_dx * 0.0025;
+        self.ufo.pitch = (self.ufo.pitch - input.look_dy * 0.0025).clamp(-1.0, 1.0);
+
+        let others = self.saucer_neighbours(None, self.ufo.pos);
+        let boxes = self.obstacles(None);
+        let ev = self.ufo.update_flown(input, dt, &boxes, &self.world, &others);
+        if ev.impact > 4.0 {
+            self.shake = self.shake.max((ev.impact / 20.0).min(1.0));
+        }
+        if self.ufo.turbo_on {
+            self.shake = self.shake.max(0.18);
+        }
+        self.player.pos = self.ufo.pos;
+        self.player.vel = Vec2::ZERO;
+        self.player.yaw = self.ufo.yaw;
+
+        if input.shoot && self.ufo.shoot_cd <= 0.0 {
+            self.ufo.shoot_cd = ufo::SHOT_COOLDOWN;
+            let dir = self.ufo.aim_dir();
+            let c = self.ufo.centre();
+            // Twin cannons: alternate left / right of the cockpit.
+            let side = if (self.anim_time * 6.0) as i32 % 2 == 0 { 1.0 } else { -1.0 };
+            let muzzle = c + Vec3::from_xz(self.ufo.right() * (0.9 * side), -0.3) + dir * 2.2;
+            let origin = c + Vec3::new(0.0, 0.2, 0.0);
+            self.shoot(origin, dir, muzzle, &boxes, true);
+        }
+
+        if input.exit_car {
+            let gh = self.world.ground_height(self.ufo.pos);
+            if self.ufo.y - gh <= ufo::EXIT_Y {
+                self.exit_ufo();
+                return;
+            }
+            self.say("Too high to get out. Hold C to land first.", 2.0);
+        }
+        // WIN: cross the finish arch in anything.
+        if self.ufo.pos.x >= world::FINISH_X {
+            self.final_time = self.run_time;
+            self.mode = Mode::Won;
+        }
+    }
+
+    fn exit_ufo(&mut self) {
+        self.flying = false;
+        self.ufo.vel = Vec3::ZERO;
+        self.player.pos = self.ufo.pos - self.ufo.right() * (ufo::RADIUS + 1.4);
+        self.player.vel = Vec2::ZERO;
+        self.player.pitch = 0.0;
+        let obstacles = self.obstacles(None);
+        crate::collision::resolve_circle(&mut self.player.pos, player::RADIUS, &obstacles);
+        self.say("Landed. E next to the UFO to fly again.", 3.0);
+    }
+
+    /// Wild saucers wander and dodge each other and your UFO.
+    fn update_saucers(&mut self, dt: f32) {
+        let leader = if self.flying { self.ufo.pos } else { self.player.pos };
+        let leader = match self.drive {
+            Some(ci) if !self.flying => self.cars[ci].pos,
+            _ => leader,
+        };
+        let player_ufo = if self.flying { Some(Neighbour { pos: self.ufo.centre(), vel: self.ufo.vel }) } else { None };
+        // Snapshot first so everyone reacts to the same instant (order-independent).
+        let snap: Vec<(Vec3, Vec3, bool)> = self.saucers.iter().map(|u| (u.centre(), u.vel, u.alive)).collect();
+        for i in 0..self.saucers.len() {
+            if !self.saucers[i].alive || self.saucers[i].pos.dist(leader) > SAUCER_ACTIVE {
+                continue;
+            }
+            let me = snap[i].0;
+            let mut others: Vec<Neighbour> = snap
+                .iter()
+                .enumerate()
+                .filter(|(j, s)| *j != i && s.2 && (s.0 - me).len() < 60.0)
+                .map(|(_, s)| Neighbour { pos: s.0, vel: s.1 })
+                .collect();
+            others.extend(player_ufo);
+            self.saucers[i].update_wild(dt, &others);
+        }
+        self.saucers.retain(|u| u.alive);
     }
 
     // -------------------------------------------------------- driving ---
@@ -499,6 +707,9 @@ impl Game {
 
     /// Where the lasers shoot from: the clown's chest, or the middle of the car.
     fn laser_source(&self) -> Vec3 {
+        if self.flying {
+            return self.ufo.centre() + Vec3::new(0.0, 0.3, 0.0);
+        }
         match self.drive {
             Some(ci) => Vec3::from_xz(self.cars[ci].pos, self.cars[ci].y + 1.5),
             None => {
@@ -559,7 +770,7 @@ impl Game {
     fn update_allies(&mut self, dt: f32) {
         let leader = match self.drive {
             Some(ci) => self.cars[ci].pos,
-            None => self.player.pos,
+            None => self.player.pos, // (the player rides along with the UFO)
         };
         // Recruit.
         let mut crew = self.crew_size();
@@ -736,7 +947,7 @@ impl Game {
         }
 
         // Zombie touches the skater: lose a heart, get knocked back.
-        if self.drive.is_none() {
+        if self.drive.is_none() && !self.flying {
             let pp = self.player.pos;
             for zi in 0..self.zombies.len() {
                 let z = &self.zombies[zi];
@@ -766,6 +977,15 @@ impl Game {
                 let d = Vec3::new(c.x - pos.x, -pos.y, c.y - pos.z);
                 let flat = (d.x * d.x + d.z * d.z).sqrt();
                 CamView { pos, yaw: d.z.atan2(d.x), pitch: d.y.atan2(flat), roll: 0.0, fov: 60.0 }
+            }
+            _ if self.flying => {
+                let u = &self.ufo;
+                let mut pos = Vec3::from_xz(u.pos, u.y + 0.9);
+                let s = self.shake * 0.1;
+                pos.x += (self.anim_time * 61.0).sin() * s;
+                pos.y += (self.anim_time * 73.0).cos() * s;
+                let speed_t = (u.speed() / ufo::BOOST_SPEED).min(1.0);
+                CamView { pos, yaw: u.yaw, pitch: u.pitch, roll: u.bank * 0.35, fov: 74.0 + 22.0 * speed_t }
             }
             _ => match self.drive {
                 None => {
@@ -809,6 +1029,7 @@ mod tests {
         g.cars.clear();
         g.zombies.clear();
         g.allies.clear();
+        g.saucers.clear();
         g.player = Player::new(Vec2::new(0.0, 0.0));
         g
     }
@@ -1273,5 +1494,116 @@ mod tests {
             top = top.max(g.player.speed());
         }
         assert!(top > 8.5, "turbo skating {top}");
+    }
+
+    // ------------------------------------------------------------ UFO ---
+
+    fn fly(g: &mut Game) {
+        g.player.pos = g.ufo.pos + Vec2::new(3.0, 0.0);
+        press_interact(g);
+        assert!(g.flying, "E next to the parked UFO boards it");
+    }
+
+    #[test]
+    fn parked_ufo_is_in_the_lot_and_clear_of_cars() {
+        for _ in 0..30 {
+            let g = Game::new();
+            assert!(!g.flying);
+            assert!(g.cars.iter().all(|c| c.pos.dist(g.ufo.pos) > 8.0));
+            assert!(g.saucers.len() > 15, "saucers: {}", g.saucers.len());
+        }
+    }
+
+    #[test]
+    fn board_fly_land_and_exit_the_ufo() {
+        let mut g = arena();
+        g.ufo.pos = Vec2::new(10.0, 10.0);
+        g.player.pos = Vec2::new(30.0, 10.0);
+        press_interact(&mut g);
+        assert!(!g.flying, "too far away");
+        fly(&mut g);
+        for _ in 0..120 {
+            tick(&mut g, &Input { up: true, forward: true, ..Default::default() });
+        }
+        assert!(g.ufo.y > 8.0 && g.ufo.pos.x > 10.0, "flew: y {} x {}", g.ufo.y, g.ufo.pos.x);
+        tick(&mut g, &Input { exit_car: true, ..Default::default() });
+        assert!(g.flying, "can't step out in mid air");
+        for _ in 0..400 {
+            tick(&mut g, &Input { down: true, ..Default::default() });
+        }
+        assert!(g.ufo.y < 3.0, "landed, y {}", g.ufo.y);
+        tick(&mut g, &Input { exit_car: true, ..Default::default() });
+        assert!(!g.flying);
+        assert!(g.player.pos.dist(g.ufo.pos) > 2.0);
+        for _ in 0..120 {
+            tick(&mut g, &Input::default());
+        }
+        assert!(g.ufo.y < 2.0 && g.ufo.speed() == 0.0, "parked again");
+    }
+
+    #[test]
+    fn ufo_cannons_shoot_down_a_saucer_and_miss_when_aimed_away() {
+        let mut g = arena();
+        g.ufo.pos = Vec2::new(0.0, 0.0);
+        g.ufo.y = 10.0;
+        fly(&mut g);
+        g.ufo.y = 10.0;
+        let mut s = Ufo::wild(40.0, Color::rgb(0.3, 1.0, 0.4));
+        s.pos = Vec2::new(30.0, 0.0);
+        s.y = 10.0;
+        g.saucers = vec![s];
+        g.ufo.pitch = 0.5;
+        tick(&mut g, &Input { shoot: true, ..Default::default() });
+        assert_eq!(g.saucers_down, 0, "aimed too high");
+        g.ufo.pitch = 0.0;
+        g.ufo.yaw = 0.0;
+        for _ in 0..30 {
+            tick(&mut g, &Input::default());
+        }
+        g.saucers[0].pos = Vec2::new(30.0, 0.0);
+        g.saucers[0].y = g.ufo.y;
+        tick(&mut g, &Input { shoot: true, ..Default::default() });
+        assert_eq!(g.saucers_down, 1);
+        assert!(g.saucers.is_empty(), "wreck removed");
+        assert!(!g.booms.is_empty());
+    }
+
+    #[test]
+    fn the_pistol_also_hits_saucers() {
+        let mut g = arena();
+        let mut s = Ufo::wild(40.0, Color::rgb(0.3, 1.0, 0.4));
+        s.pos = Vec2::new(12.0, 0.0);
+        s.y = g.player.eye().y;
+        g.saucers = vec![s];
+        tick(&mut g, &Input { shoot: true, ..Default::default() });
+        assert_eq!(g.saucers_down, 1);
+    }
+
+    #[test]
+    fn flying_into_a_crowd_of_saucers_never_touches_one() {
+        let mut g = arena();
+        g.ufo.pos = Vec2::new(0.0, 0.0);
+        fly(&mut g);
+        g.ufo.y = 10.0;
+        for k in 0..8 {
+            let mut s = Ufo::wild(100.0, Color::rgb(0.3, 1.0, 0.4));
+            s.pos = Vec2::new(40.0 + k as f32 * 18.0, (k as f32 - 3.5) * 2.5);
+            s.y = 10.0 + (k % 3) as f32;
+            g.saucers.push(s);
+        }
+        let mut min = f32::MAX;
+        for _ in 0..(25 * 60) {
+            tick(&mut g, &Input { forward: true, ..Default::default() });
+            for s in &g.saucers {
+                min = min.min((s.centre() - g.ufo.centre()).len());
+            }
+            let n = g.saucers.len();
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    min = min.min((g.saucers[i].centre() - g.saucers[j].centre()).len());
+                }
+            }
+        }
+        assert!(min > ufo::RADIUS * 2.0 - 0.45, "saucers overlapped, min {min}");
     }
 }
