@@ -10,6 +10,7 @@ use crate::car::{self, Car};
 use crate::math::{Color, Mat3, Vec2, Vec3};
 use crate::platform::{self as p, Mat};
 use crate::player::Player;
+use crate::ufo::{self, Ufo};
 use crate::state::{CamView, Game, Mode, LASER_RANGE, LASER_TTL};
 use crate::world::{self, neon, Building, Prop, PropKind, World};
 use crate::zombies::{ZState, Zombie};
@@ -42,6 +43,17 @@ pub fn draw(game: &Game) {
             draw_car(c, game.drive == Some(i), t);
         }
     }
+    for u in &game.saucers {
+        if (u.pos.x - cam.pos.x).abs() < 400.0 {
+            draw_ufo(u, t, false);
+        }
+    }
+    if !game.flying {
+        draw_ufo(&game.ufo, t, true);
+    }
+    for b in &game.booms {
+        draw_boom(b, t);
+    }
     for z in &game.zombies {
         if (z.pos.x - cam.pos.x).abs() < 300.0 {
             draw_zombie(z);
@@ -64,9 +76,13 @@ pub fn draw(game: &Game) {
     }
     draw_laser_burst(game);
     if game.mode != Mode::Title {
-        match game.drive {
-            None => draw_viewmodel_foot(game, &cam),
-            Some(ci) => draw_viewmodel_car(game, &game.cars[ci], &cam),
+        if game.flying {
+            draw_viewmodel_ufo(game, &cam);
+        } else {
+            match game.drive {
+                None => draw_viewmodel_foot(game, &cam),
+                Some(ci) => draw_viewmodel_car(game, &game.cars[ci], &cam),
+            }
         }
     }
 
@@ -525,6 +541,83 @@ fn draw_car(c: &Car, driven: bool, t: f32) {
     }
 }
 
+// ================================================================ UFOs ===
+
+/// A flying saucer: disc hull, glass dome, spinning rim lights, underglow.
+/// `parked` adds a landing-pad glow and a beacon so you can spot it in the lot.
+fn draw_ufo(u: &Ufo, t: f32, parked: bool) {
+    let m = Mat3::rot_x(u.bank).mul(&Mat3::rot_z(u.tilt));
+    let c = Vec3::from_xz(u.pos, u.y + if parked { (t * 1.6).sin() * 0.06 } else { (t * 1.3 + u.spin).sin() * 0.12 });
+    let put = |l: Vec3, s: Vec3, col: Color, mat: Mat| p::draw_box(c + m.mul_vec(l), s, &m, col, mat);
+    let blob = |l: Vec3, r: Vec3, col: Color, mat: Mat| p::draw_blob(c + m.mul_vec(l), r, &m, col, mat);
+    let hull = u.color;
+    let dark = Color::rgb(0.08, 0.08, 0.12);
+
+    blob(Vec3::new(0.0, 0.0, 0.0), Vec3::new(ufo::RADIUS, 0.55, ufo::RADIUS), hull, Mat::Lit);
+    blob(Vec3::new(0.0, -0.25, 0.0), Vec3::new(1.5, 0.35, 1.5), dark, Mat::Lit);
+    blob(Vec3::new(0.0, 0.45, 0.0), Vec3::new(1.15, 0.8, 1.15), Color::rgb(0.45, 0.9, 1.0), Mat::Glow);
+    blob(Vec3::new(0.0, 0.5, 0.0), Vec3::new(0.8, 0.5, 0.8), Color::rgb(0.9, 1.0, 1.0), Mat::Glow);
+    // Rim lights chase around the edge.
+    for i in 0..10 {
+        let a = i as f32 * TAU / 10.0 + u.spin;
+        let k = 0.4 + 0.6 * pulse(t, 6.0, i as f32);
+        let col = neon(i).scale(k);
+        put(Vec3::new(a.cos() * 2.15, 0.0, a.sin() * 2.15), Vec3::new(0.22, 0.2, 0.22), col, Mat::Glow);
+    }
+    // Underglow disc.
+    put(Vec3::new(0.0, -0.58, 0.0), Vec3::new(1.4, 0.05, 1.4), hull.lerp(WHITE, 0.4), Mat::Glow);
+    // Landing legs when parked.
+    if parked {
+        for a in [0.8f32, 2.4, 4.0, 5.5] {
+            put(Vec3::new(a.cos() * 1.6, -0.75, a.sin() * 1.6), Vec3::new(0.14, 0.7, 0.14), dark, Mat::Lit);
+            put(Vec3::new(a.cos() * 1.6, -1.1, a.sin() * 1.6), Vec3::new(0.45, 0.07, 0.45), dark, Mat::Lit);
+        }
+        let k = 0.55 + 0.45 * pulse(t, 4.0, 1.0);
+        p::draw_aabb(Vec3::from_xz(u.pos, 7.0), Vec3::new(0.5, 12.0, 0.5), Color::rgb(0.9, 0.3, 1.0).scale(k), Mat::Glow);
+        p::draw_aabb(Vec3::from_xz(u.pos, 0.04), Vec3::new(6.0, 0.05, 6.0), Color::rgb(0.9, 0.3, 1.0).scale(0.3 + 0.3 * k), Mat::Glow);
+    }
+    // Warning flash while the avoidance AI is steering a wild saucer away.
+    if !parked && u.avoiding > 0.15 {
+        p::draw_aabb(c + Vec3::new(0.0, 1.8, 0.0), Vec3::new(0.35, 0.35, 0.35), Color::rgb(1.0, 0.4, 0.1).scale(u.avoiding), Mat::Glow);
+    }
+}
+
+fn draw_boom(b: &crate::state::Boom, _t: f32) {
+    let k = 1.0 - (b.ttl / crate::state::BOOM_TTL).clamp(0.0, 1.0);
+    p::draw_ball(b.pos, 0.8 + 3.5 * k, Color::rgb(1.0, 0.55, 0.15).scale(1.0 - 0.6 * k));
+    p::draw_ball(b.pos, 0.4 + 2.0 * k, Color::rgb(1.0, 0.95, 0.6));
+}
+
+/// Inside the UFO: a canopy rim, twin cannons that recoil, a targeting
+/// frame and a boost bar. Drawn in the camera frame like the other viewmodels.
+fn draw_viewmodel_ufo(game: &Game, cam: &CamView) {
+    let u = &game.ufo;
+    let b = view_basis(cam);
+    let place = |r: f32, up: f32, f: f32| cam.pos + b.z * r + b.y * up + b.x * f;
+    let dark = Color::rgb(0.08, 0.08, 0.14);
+    let kick = (u.shoot_cd / ufo::SHOT_COOLDOWN).clamp(0.0, 1.0);
+    // Canopy rim: low dash and two side struts.
+    p::draw_box(place(0.0, -0.62, 0.9), Vec3::new(0.5, 0.06, 2.0), &b, dark, Mat::Lit);
+    for sd in [-1.0f32, 1.0] {
+        p::draw_box(place(sd * 1.0, -0.1, 0.9), Vec3::new(0.12, 1.4, 0.1), &b, dark, Mat::Lit);
+        // Cannon barrels at the bottom corners.
+        let g = place(sd * 0.42, -0.34, 1.0 - kick * 0.1);
+        p::draw_box(g, Vec3::new(0.7, 0.07, 0.07), &b, Color::rgb(0.55, 0.55, 0.65), Mat::Lit);
+        p::draw_box(g + b.x * 0.36, Vec3::new(0.06, 0.1, 0.1), &b, hull_glow(u), Mat::Glow);
+        if kick > 0.6 {
+            p::draw_box(g + b.x * 0.5, Vec3::new(0.14, 0.14, 0.02), &b, Color::rgb(0.6, 1.0, 1.0), Mat::Glow);
+        }
+    }
+    // Boost bar along the dash.
+    let bar = 0.05 + 0.8 * u.turbo;
+    let col = if u.turbo_on { Color::rgb(1.0, 0.6, 0.1) } else { neon(1) };
+    p::draw_box(place(-0.45 + bar * 0.5, -0.57, 0.85), Vec3::new(0.03, 0.03, bar), &b, col, Mat::Glow);
+}
+
+fn hull_glow(u: &Ufo) -> Color {
+    u.color.lerp(WHITE, 0.5)
+}
+
 // ============================================================== zombies ===
 
 fn draw_zombie(z: &Zombie) {
@@ -784,6 +877,9 @@ fn gauge(x: f32, y: f32, w: f32, h: f32, frac: f32, col: Color, label: &str, s: 
 }
 
 fn objective(g: &Game) -> String {
+    if g.flying {
+        return format!("FINISH ARCH {:.0} m away. Shoot the saucers! F = land & exit", (world::FINISH_X - g.ufo.pos.x).max(0.0));
+    }
     if let Some(ci) = g.drive {
         format!("FINISH ARCH {:.0} m away. Shift = turbo, ramps = air, F = get out", (world::FINISH_X - g.cars[ci].pos.x).max(0.0))
     } else {
@@ -802,7 +898,7 @@ fn draw_hud(g: &Game) {
     }
 
     // Crosshair (hidden while driving: nothing to aim).
-    if g.drive.is_none() {
+    if g.drive.is_none() || g.flying {
         let cy = sz.y * 0.5;
         let col = WHITE;
         for (dx, dy, w, h) in [(-14.0, -1.5, 10.0, 3.0), (4.0, -1.5, 10.0, 3.0), (-1.5, -14.0, 3.0, 10.0), (-1.5, 4.0, 3.0, 10.0)] {
@@ -827,6 +923,15 @@ fn draw_hud(g: &Game) {
     // Kill counter.
     p::draw_rect(12.0 * s, 70.0 * s, 330.0 * s, 32.0 * s, Color::rgba(0.04, 0.0, 0.1, 0.7));
     shadow_text(&format!("ZOMBIES DOWN  {}", g.kills), 20.0 * s, 94.0 * s, 26.0 * s, LIME);
+    if g.saucers_down > 0 || g.flying {
+        p::draw_rect(12.0 * s, 106.0 * s, 330.0 * s, 32.0 * s, Color::rgba(0.04, 0.0, 0.1, 0.7));
+        shadow_text(&format!("SAUCERS DOWN  {}", g.saucers_down), 20.0 * s, 130.0 * s, 26.0 * s, neon(1));
+    }
+    // Co-pilot AI status while the UFO is steering around a saucer.
+    if g.flying && g.ufo.avoiding > 0.1 {
+        let k = pulse(g.anim_time, 12.0, 0.0);
+        shadow_text_c("CO-PILOT AVOIDING COLLISION", cx, sz.y * 0.36, 30.0 * s, Color::rgb(1.0, 0.6, 0.15).lerp(YELLOW, k));
+    }
 
     // Timer.
     let secs = g.run_time as u32;
@@ -841,6 +946,7 @@ fn draw_hud(g: &Game) {
 
     // Turbo + clown-power gauges and the crew count (bottom left).
     let (turbo, turbo_on) = match g.drive {
+        _ if g.flying => (g.ufo.turbo, g.ufo.turbo_on),
         Some(ci) => (g.cars[ci].turbo, g.cars[ci].turbo_on),
         None => (g.player.turbo, g.player.turbo_on),
     };
@@ -861,6 +967,10 @@ fn draw_hud(g: &Game) {
         shadow_text_c(txt, cx, sz.y * 0.3, 38.0 * s, neon(0).lerp(YELLOW, k));
     }
     // Air time while flying.
+    if g.flying {
+        let gh = g.world.ground_height(g.ufo.pos);
+        shadow_text_c(&format!("ALT  {:.0} m", g.ufo.y - gh), cx, sz.y * 0.22, 36.0 * s, neon(4));
+    }
     if let Some(ci) = g.drive {
         if g.cars[ci].airborne {
             shadow_text_c(&format!("AIR  {:.1}s", g.cars[ci].air_time), cx, sz.y * 0.22, 40.0 * s, neon(4));
@@ -887,7 +997,7 @@ fn draw_hud(g: &Game) {
     if let Some((msg, _)) = &g.toast {
         shadow_text_c(msg, cx, 86.0 * s, 26.0 * s, YELLOW);
     }
-    if g.drive.is_none() {
+    if g.drive.is_none() && !g.flying {
         if let Some(pr) = &g.prompt {
             let tw = p::text_width(pr, 30.0 * s);
             panel(cx - tw * 0.5 - 14.0 * s, sz.y * 0.68 - 30.0 * s, tw + 28.0 * s, 44.0 * s, YELLOW);
@@ -897,11 +1007,15 @@ fn draw_hud(g: &Game) {
 
     // Speed readout.
     let speed = match g.drive {
+        _ if g.flying => g.ufo.speed() * 3.6,
         Some(ci) => g.cars[ci].speed.abs() * 3.6,
         None => g.player.speed() * 3.6,
     };
     let label = format!("{:.0} km/h", speed);
     shadow_text(&label, sz.x - p::text_width(&label, 34.0 * s) - 24.0 * s, sz.y - 24.0 * s, 34.0 * s, neon(1));
+    if g.flying {
+        shadow_text("F: land & exit", sz.x - 230.0 * s, sz.y - 62.0 * s, 24.0 * s, WHITE);
+    }
     if g.drive.is_some() {
         shadow_text("F: get out", sz.x - 170.0 * s, sz.y - 62.0 * s, 24.0 * s, WHITE);
     }
@@ -913,7 +1027,19 @@ fn draw_labels(g: &Game) {
         return;
     }
     let s = ui_scale();
-    if g.drive.is_none() {
+    if g.drive.is_none() && !g.flying {
+        let u = &g.ufo;
+        let dist = (Vec3::from_xz(u.pos, 0.0) - g.camera().pos).len();
+        if let Some(sp) = p::world_to_screen(Vec3::from_xz(u.pos, 3.2)) {
+            if dist < 90.0 {
+                let size = (34.0 * s * (22.0 / dist.max(6.0)).clamp(0.55, 1.3)).max(16.0);
+                let w = p::text_width("FLY!", size);
+                p::draw_rect(sp.x - w * 0.5 - 8.0, sp.y - size * 0.85, w + 16.0, size * 1.1, Color::rgba(0.0, 0.0, 0.0, 0.55));
+                p::draw_text("FLY!", sp.x - w * 0.5, sp.y, size, Color::rgb(0.95, 0.4, 1.0));
+            }
+        }
+    }
+    if g.drive.is_none() && !g.flying {
         for c in &g.cars {
             let Some(sp) = p::world_to_screen(Vec3::from_xz(c.pos, 2.8)) else { continue };
             let dist = (Vec3::from_xz(c.pos, 0.0) - g.camera().pos).len();

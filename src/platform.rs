@@ -70,6 +70,8 @@ pub struct Input {
     pub exit_car: bool, // (edge) F
     pub shoot: bool,    // (edge) left mouse
     pub turbo: bool,    // held: Shift
+    pub up: bool,       // held: Space (UFO climbs)
+    pub down: bool,     // held: C / Ctrl (UFO descends)
     pub laser: bool,    // (edge) right mouse / G: clown laser burst
     pub confirm: bool,  // (edge) Enter / Space / click, for menus
     pub pause: bool,    // (edge) Esc
@@ -153,6 +155,8 @@ pub fn poll_input() -> Input {
         exit_car: is_key_pressed(KeyCode::F),
         shoot: click && captured,
         turbo: is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift),
+        up: is_key_down(KeyCode::Space),
+        down: is_key_down(KeyCode::C) || is_key_down(KeyCode::LeftControl),
         laser: captured && (is_mouse_button_pressed(MouseButton::Right) || is_key_pressed(KeyCode::G)),
         confirm: is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) || click,
         pause: is_key_pressed(KeyCode::Escape),

@@ -15,6 +15,7 @@ mod player;
 mod render;
 mod smoke;
 mod state;
+mod ufo;
 mod world;
 mod zombies;
 
@@ -50,6 +51,8 @@ async fn app() {
         input.exit_car |= fresh.exit_car;
         input.shoot |= fresh.shoot;
         input.turbo = fresh.turbo;
+        input.up = fresh.up;
+        input.down = fresh.down;
         input.laser |= fresh.laser;
         input.confirm |= fresh.confirm;
         input.pause |= fresh.pause;
